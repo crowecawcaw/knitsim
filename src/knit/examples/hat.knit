@@ -1,0 +1,28 @@
+pattern "Ribbed Beanie"
+source https://woollywormhead.com/blog/2006/12/23/ribbed-beanie
+# Free pattern by Woolly Wormhead. Chunky yarn, 5.5 mm needles.
+# Sizes are named by finished circumference.
+param size enum 16in 18in 20in = 20in "Size"
+param main color = #3d6274 "Yarn"
+
+gauge 16 sts x 20 rows = 4 in
+yarn ${main}
+
+piece hat round
+  cast_on 64/72/80
+  rows until 6/6.5/7in rib6x2         # K6, P2 around
+  # crown
+  row st dec every 8 ; expect 56/63/70   # *K6, K2tog*
+  row st dec every 7 ; expect 48/54/60
+  row st dec every 6 ; expect 40/45/50
+  row st dec every 5 ; expect 32/36/40
+  row st dec every 4 ; expect 24/27/30
+  row st dec every 3 ; expect 16/18/20
+  row st dec every 2 ; expect 8/9/10     # K2tog around
+  row st dec every 2 ; expect 4/5/5
+  gather                                 # thread yarn through, pull tight
+end
+
+assemble
+  place hat at head
+end

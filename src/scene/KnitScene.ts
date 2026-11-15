@@ -1,0 +1,552 @@
+// The one 3D scene: pieces on the mat ⇄ aligned around the form ⇄ assembled.
+// Imperative three.js code; React drives it through the public methods.
+import * as THREE from 'three';
+import { BODY, TABLE, makeSim, type KnitDoc, type Piece, type Stitch } from '../knit';
+import { drawOverlay, drawPiece, rowExtents, type Side } from '../draw/stitches';
+import type { ViewMode } from '../urlState';
+
+// Match the look of the original (three r147, legacy lighting): hex colours are
+// used as-is and lights are scaled from the old intensity units.
+THREE.ColorManagement.enabled = false;
+const LEGACY_LIGHT = Math.PI;
+
+const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+const MAT_Y = -16;
+
+export interface KnitState { curPiece: string | null; progress: number; selected: Stitch | null }
+
+interface Cam { target: THREE.Vector3; dist: number; phi: number; theta: number; fov: number }
+interface Box { x0: number; x1: number; z0: number; z1: number }
+interface Fade { v: number; t: number; mats: THREE.Material[]; base: number[] }
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+type Sim = any; // returned by makeSim (untyped engine)
+interface Part {
+  P: Piece; mesh: any; offset: number; idx: number;
+  canvas: Record<Side, HTMLCanvasElement>; tex: Record<Side, THREE.CanvasTexture>; scratch?: HTMLCanvasElement;
+  g: THREE.BufferGeometry; attr: THREE.BufferAttribute; meshes: THREE.Mesh[]; flatBox: Box;
+}
+
+export interface SceneCallbacks {
+  onPick: (st: Stitch) => void;
+}
+
+export class KnitScene {
+  mode: ViewMode = 'pieces';
+  showSeams = true;
+  private doc: KnitDoc | null = null;
+  private knit: KnitState = { curPiece: null, progress: Infinity, selected: null };
+  private dirtyTex = new Set<string>();
+
+  private R: THREE.WebGLRenderer;
+  private scene = new THREE.Scene();
+  private camera = new THREE.PerspectiveCamera(22, 1, 0.5, 2000);
+  private raycaster = new THREE.Raycaster();
+  private mat: THREE.Mesh; private mtex: THREE.CanvasTexture; private grabDot: THREE.Mesh;
+  private fades: Record<'form' | 'table' | 'mat' | 'labels', Fade>;
+  private group: THREE.Group | null = null;
+  private parts: Part[] = [];
+  private sim: Sim = null;
+  private posAligned: Float32Array | null = null;
+  private posFlat: Float32Array | null = null;
+  private posAssembled: Float32Array | null = null;
+  private flatBounds: Box | null = null;
+  private seamAttr: THREE.BufferAttribute | null = null;
+  private seamLines: THREE.LineSegments | null = null;
+  private seamMat: THREE.LineBasicMaterial | null = null;
+  private tween: { from: Float32Array; to: Float32Array; lift: number; t0: number; dur: number; stagger: number; done?: () => void } | null = null;
+  private camTween: { from: Cam; to: Cam; t0: number; dur: number } | null = null;
+  private cam: Cam = { target: new THREE.Vector3(0, MAT_Y, 0), dist: 80, phi: 0.01, theta: 0, fov: 22 };
+  private camSet = false; private sized = false;
+  private simRunning = false; private simT = 0; private relaxUntil = 0; private lastT = 0;
+  private raf = 0;
+  private cleanup: (() => void)[] = [];
+
+  constructor(private host: HTMLElement, private statusEl: HTMLElement, private cb: SceneCallbacks) {
+    const R = (this.R = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true }));
+    R.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    host.prepend(R.domElement);
+    const scene = this.scene;
+    scene.background = new THREE.Color('#efe6d8');
+    scene.add(new THREE.HemisphereLight(0xfff6e8, 0x8a7a68, 0.9 * LEGACY_LIGHT));
+    const d1 = new THREE.DirectionalLight(0xffffff, 0.8 * LEGACY_LIGHT); d1.position.set(20, 60, 35); scene.add(d1);
+    const d2 = new THREE.DirectionalLight(0xffe2c4, 0.3 * LEGACY_LIGHT); d2.position.set(-30, 10, -20); scene.add(d2);
+    // dress form
+    const fm = new THREE.MeshStandardMaterial({ color: 0xd9d1c4, roughness: 0.8, transparent: true, opacity: 0.55, depthWrite: false });
+    const form = new THREE.Group();
+    BODY.capsules.filter((c: any) => !c.hidden).forEach((c: any) => {
+      const a = new THREE.Vector3(...(c.a as [number, number, number])), b = new THREE.Vector3(...(c.b as [number, number, number]));
+      const L = a.distanceTo(b); const g = new THREE.Group();
+      if (L > 0.01) g.add(new THREE.Mesh(new THREE.CylinderGeometry(c.rb, c.ra, L, 24, 1, true), fm));
+      [a, b].forEach((_p, i) => {
+        const sp = new THREE.Mesh(new THREE.SphereGeometry(i ? c.rb : c.ra, 24, 16), fm);
+        sp.position.set(0, (i ? 0.5 : -0.5) * L, 0); g.add(sp);
+      });
+      g.position.copy(a.clone().add(b).multiplyScalar(0.5));
+      g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+      form.add(g);
+    });
+    const standMat = new THREE.MeshStandardMaterial({ color: 0x8b6b4a, transparent: true });
+    const stand = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 14, 12), standMat); stand.position.set(0, -14, 0); form.add(stand);
+    scene.add(form);
+    const T = TABLE; const table = new THREE.Group();
+    const tm = new THREE.MeshStandardMaterial({ color: 0xb08a62, roughness: 0.7, transparent: true });
+    const top = new THREE.Mesh(new THREE.CylinderGeometry(T.r, T.r, T.depth, 48), tm); top.position.set(T.c[0], T.top - T.depth / 2, T.c[2]); table.add(top);
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 2.2, 26, 16), tm); leg.position.set(T.c[0], T.top - 14, T.c[2]); table.add(leg);
+    scene.add(table);
+    // cutting mat with a 1-inch grid
+    const mc = document.createElement('canvas'); mc.width = mc.height = 512; const mx = mc.getContext('2d')!;
+    mx.fillStyle = '#3f6b5c'; mx.fillRect(0, 0, 512, 512);
+    for (let i = 0; i <= 12; i++) {
+      const p = (i * 512) / 12;
+      mx.strokeStyle = i % 6 === 0 ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.22)'; mx.lineWidth = i % 6 === 0 ? 2.5 : 1.2;
+      mx.beginPath(); mx.moveTo(p, 0); mx.lineTo(p, 512); mx.moveTo(0, p); mx.lineTo(512, p); mx.stroke();
+    }
+    const mtex = (this.mtex = new THREE.CanvasTexture(mc));
+    mtex.wrapS = mtex.wrapT = THREE.RepeatWrapping; mtex.anisotropy = 8; mtex.colorSpace = THREE.SRGBColorSpace;
+    const mat = (this.mat = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial({ map: mtex, roughness: 0.95, transparent: true, depthWrite: false })));
+    mat.rotation.x = -Math.PI / 2; mat.position.y = MAT_Y - 0.05; scene.add(mat);
+    const grabDot = (this.grabDot = new THREE.Mesh(new THREE.SphereGeometry(0.45, 16, 12), new THREE.MeshBasicMaterial({ color: 0xc0573e })));
+    grabDot.visible = false; scene.add(grabDot);
+    this.fades = {
+      form: { v: 0, t: 0, mats: [fm, standMat], base: [0.55, 1] },
+      table: { v: 0, t: 0, mats: [tm], base: [1] },
+      mat: { v: 1, t: 1, mats: [mat.material as THREE.Material], base: [1] },
+      labels: { v: 1, t: 1, mats: [], base: [] },
+    };
+    this.setupInput();
+    const loop = () => { this.frame(); this.raf = requestAnimationFrame(loop); };
+    this.raf = requestAnimationFrame(loop);
+  }
+
+  dispose() {
+    cancelAnimationFrame(this.raf);
+    this.cleanup.forEach((f) => f());
+    this.disposeGroup();
+    this.R.dispose();
+    this.R.domElement.remove();
+  }
+
+  // ---------- public API ----------
+  setDoc(doc: KnitDoc) { this.doc = doc; this.rebuild(); }
+
+  setKnitState(next: KnitState) {
+    const prev = this.knit;
+    [prev.curPiece, prev.selected?.piece, next.curPiece, next.selected?.piece].forEach((n) => { if (n) this.dirtyTex.add(n); });
+    this.knit = next;
+  }
+
+  setShowSeams(v: boolean) { this.showSeams = v; }
+
+  fit(dur = 0.8) { this.tweenCam(this.camPreset(this.mode), dur); }
+
+  focusPiece(name: string) {
+    if (this.mode !== 'pieces') return;
+    const part = this.parts.find((p) => p.P.name === name); if (!part || !part.flatBox) return;
+    const b = part.flatBox;
+    this.tweenCam(this.camPreset('pieces', { x0: b.x0 - 3, x1: b.x1 + 3, z0: b.z0 - 3, z1: b.z1 + 5 }), 0.8);
+  }
+
+  setMode(m: ViewMode) {
+    if (m === this.mode) return;
+    if (!this.sim) { this.mode = m; return; }
+    const prev = this.mode; this.mode = m;
+    this.simRunning = false;
+    const lift = (prev === 'pieces') !== (m === 'pieces') ? 10 : 0;
+    if (m === 'pieces') { this.animateTo(this.posFlat!, lift, 1.5); this.tweenCam(this.camPreset('pieces'), 1.6); }
+    else if (m === 'aligned') { this.animateTo(this.posAligned!, lift, 1.5); this.tweenCam(this.camPreset('aligned'), 1.6); }
+    else { // assembled: fly to the aligned layout first (if needed), then sew
+      this.tweenCam(this.camPreset('assembled'), prev === 'pieces' ? 2.4 : 1.4);
+      if (prev === 'pieces') this.animateTo(this.posAligned!, lift, 1.4, () => this.startSim());
+      else this.startSim();
+    }
+    this.applyFades(); this.updateStatus();
+  }
+
+  // ---------- build ----------
+  private disposeGroup() {
+    if (!this.group) return;
+    this.scene.remove(this.group);
+    this.group.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.geometry) m.geometry.dispose();
+      const mat = m.material as THREE.MeshStandardMaterial | undefined;
+      if (mat && mat.map && mat.map !== this.mtex) mat.map.dispose();
+    });
+  }
+
+  private rebuild() {
+    this.disposeGroup();
+    this.group = new THREE.Group(); this.scene.add(this.group);
+    this.parts = []; this.sim = null; this.posAssembled = null; this.tween = null; this.simRunning = false;
+    this.fades.labels.mats = []; this.fades.labels.base = [];
+    const doc = this.doc;
+    if (!doc || !doc.seams) return;
+    let sim: Sim;
+    try { sim = makeSim(doc); } catch (e) { console.error(e); this.statusEl.textContent = 'Could not build 3D: ' + (e as Error).message; return; }
+    this.sim = sim; sim.parts.forEach((pt: Part, i: number) => { pt.idx = i; });
+    this.parts = sim.parts;
+    this.posAligned = new Float32Array(sim.pos);
+    this.posFlat = this.layoutFlat(sim);
+    this.parts.forEach((part, idx) => {
+      const g = new THREE.BufferGeometry();
+      const n = part.mesh.local.length;
+      const attr = new THREE.BufferAttribute(sim.pos.subarray(part.offset * 3, (part.offset + n) * 3), 3); attr.setUsage(THREE.DynamicDrawUsage);
+      g.setAttribute('position', attr); g.setAttribute('uv', new THREE.Float32BufferAttribute(part.mesh.uv, 2)); g.setIndex(part.mesh.tris);
+      part.canvas = { RS: document.createElement('canvas'), WS: document.createElement('canvas') };
+      part.tex = {} as Part['tex'];
+      (['RS', 'WS'] as Side[]).forEach((sd) => {
+        const t = new THREE.CanvasTexture(part.canvas[sd]); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; part.tex[sd] = t;
+      });
+      this.drawTexture(part, 'RS'); this.drawTexture(part, 'WS');
+      const mF = new THREE.MeshStandardMaterial({ map: part.tex.RS, bumpMap: part.tex.RS, bumpScale: 0.25, roughness: 0.95, alphaTest: 0.4, side: THREE.FrontSide });
+      const mB = new THREE.MeshStandardMaterial({ map: part.tex.WS, bumpMap: part.tex.WS, bumpScale: 0.25, roughness: 0.95, alphaTest: 0.4, side: THREE.BackSide, color: 0xe6dccd });
+      const a = new THREE.Mesh(g, mF), b = new THREE.Mesh(g, mB); a.userData.part = b.userData.part = part;
+      this.group!.add(a, b); Object.assign(part, { g, attr, meshes: [a, b], idx });
+      // label on the mat
+      const lc = document.createElement('canvas'); lc.width = 512; lc.height = 96; const lx = lc.getContext('2d')!;
+      lx.fillStyle = 'rgba(255,255,255,0.92)'; lx.font = '600 44px "IBM Plex Mono", monospace'; lx.fillText(part.P.name, 6, 46);
+      lx.font = '400 30px "IBM Plex Sans", sans-serif'; lx.fillStyle = 'rgba(255,255,255,0.7)';
+      lx.fillText(`${part.P.widthIn.toFixed(1)}″ × ${part.P.heightIn.toFixed(1)}″ · ${part.P.nrows - 1} rows`, 6, 86);
+      const lt = new THREE.CanvasTexture(lc); lt.colorSpace = THREE.SRGBColorSpace;
+      const lm = new THREE.MeshBasicMaterial({ map: lt, transparent: true, depthWrite: false });
+      const label = new THREE.Mesh(new THREE.PlaneGeometry(16, 3), lm); label.rotation.x = -Math.PI / 2;
+      const fb = part.flatBox; label.position.set(fb.x0 + 8, MAT_Y + 0.01, fb.z1 + 2.6); this.group!.add(label);
+      this.fades.labels.mats.push(lm); this.fades.labels.base.push(1);
+    });
+    // seam threads
+    const sp = new Float32Array(sim.seams.length * 3);
+    const sg2 = new THREE.BufferGeometry(); const sattr = new THREE.BufferAttribute(sp, 3); sattr.setUsage(THREE.DynamicDrawUsage); sg2.setAttribute('position', sattr);
+    this.seamMat = new THREE.LineBasicMaterial({ color: 0xc0573e, transparent: true, opacity: 0.85 });
+    this.seamLines = new THREE.LineSegments(sg2, this.seamMat); this.seamAttr = sattr; this.group.add(this.seamLines);
+    // mat size
+    const fb = this.flatBounds!; const mw = Math.max(fb.x1 - fb.x0, fb.z1 - fb.z0) * 4 + 120, md = mw;
+    this.mat.scale.set(mw, md, 1); this.mat.position.set((fb.x0 + fb.x1) / 2, MAT_Y - 0.05, (fb.z0 + fb.z1) / 2); this.mtex.repeat.set(mw / 12, md / 12);
+    // put pieces where the current mode wants them, no animation
+    sim.pos.set(this.mode === 'pieces' ? this.posFlat : this.posAligned);
+    this.applyFades(true);
+    this.markDirty();
+    if (this.mode === 'assembled') this.startSim();
+    if (!this.camSet) { this.camSet = true; Object.assign(this.cam, this.camPreset(this.mode)); }
+    this.updateStatus();
+  }
+
+  /** Shelf-pack the flat pieces onto the mat (x right, rows run "up" the screen = −z). */
+  private layoutFlat(sim: Sim) {
+    const out = new Float32Array(sim.pos.length);
+    const items = (sim.parts as Part[]).map((p) => {
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      p.mesh.local.forEach((l: { x: number; y: number }) => { x0 = Math.min(x0, l.x); x1 = Math.max(x1, l.x); y0 = Math.min(y0, l.y); y1 = Math.max(y1, l.y); });
+      return { p, x0, x1, y0, y1, w: x1 - x0, h: y1 - y0, ox: 0, oz: 0 };
+    });
+    const area = items.reduce((a, it) => a + (it.w + 5) * (it.h + 6), 0);
+    const maxW = Math.max(Math.sqrt(area) * 1.5, ...items.map((it) => it.w));
+    let cx = 0, cz = 0, rowH = 0; const gap = 5, gapZ = 7;
+    items.forEach((it) => {
+      if (cx > 0 && cx + it.w > maxW) { cx = 0; cz += rowH + gapZ; rowH = 0; }
+      it.ox = cx; it.oz = cz; cx += it.w + gap; rowH = Math.max(rowH, it.h);
+    });
+    let bx0 = Infinity, bx1 = -Infinity, bz0 = Infinity, bz1 = -Infinity;
+    items.forEach((it) => { bx0 = Math.min(bx0, it.ox); bx1 = Math.max(bx1, it.ox + it.w); bz0 = Math.min(bz0, it.oz); bz1 = Math.max(bz1, it.oz + it.h); });
+    const mx = (bx0 + bx1) / 2, mz = (bz0 + bz1) / 2;
+    items.forEach((it) => {
+      const { p } = it; const X0 = it.ox - mx, Ztop = it.oz - mz;
+      // piece's top row sits at Ztop (far side), cast-on edge nearest the viewer
+      p.mesh.local.forEach((l: { x: number; y: number }, k: number) => {
+        const i = (p.offset + k) * 3;
+        out[i] = X0 + (l.x - it.x0); out[i + 1] = MAT_Y + 0.02 + (p.idx || 0) * 0.002; out[i + 2] = Ztop + (it.y1 - l.y);
+      });
+      p.flatBox = { x0: X0, x1: X0 + it.w, z0: Ztop, z1: Ztop + it.h };
+    });
+    this.flatBounds = { x0: bx0 - mx, x1: bx1 - mx, z0: bz0 - mz, z1: bz1 - mz + 4 };
+    return out;
+  }
+
+  private markDirty() {
+    this.parts.forEach((p) => { p.attr.needsUpdate = true; p.g.computeVertexNormals(); p.g.computeBoundingSphere(); });
+  }
+
+  // ---------- textures ----------
+  private texSize(P: Piece) {
+    const { sg, rg } = this.doc!.built;
+    const big = Math.max(P.maxx - P.minx + 1, (P.nrows * sg) / rg);
+    const pxS = Math.max(8, Math.min(24, Math.floor(2048 / big)));
+    return { pxS, pxR: (pxS * sg) / rg };
+  }
+
+  private drawTexture(part: Part, side: Side) {
+    const P = part.P, mesh = part.mesh; const { pxS, pxR } = this.texSize(P);
+    const { curPiece, progress, selected } = this.knit;
+    const W = Math.ceil(mesh.W * pxS), H = Math.ceil(mesh.H * pxR);
+    const cv = part.canvas[side]; if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+    const ctx = cv.getContext('2d')!; ctx.clearRect(0, 0, W, H);
+    const ox = (P.minx - 0.5 - mesh.x0) * pxS, oy = H - P.nrows * pxR;
+    const isCur = P.name === curPiece; const inProgress = isCur && progress < P.total;
+    const src = part.scratch || (part.scratch = document.createElement('canvas')); src.width = W; src.height = H;
+    const sctx = src.getContext('2d')!; sctx.clearRect(0, 0, W, H);
+    const geo = drawPiece(sctx, P, ox, oy, pxS, pxR, { side, stretch: !!mesh.band, progress: inProgress ? progress : null });
+    if (!inProgress) { // bleed whole-stitch copies under cut mesh edges
+      const bx = mesh.band ? 0 : mesh.cs + 1, by = mesh.cr + 1;
+      for (let r = by; r >= 1; r--) { ctx.drawImage(src, 0, r * pxR); ctx.drawImage(src, 0, -r * pxR); }
+      ctx.globalCompositeOperation = 'destination-over';
+      for (let c = 1; c <= bx; c++) for (let r = -by; r <= by; r++) { ctx.drawImage(src, c * pxS, r * pxR); ctx.drawImage(src, -c * pxS, r * pxR); }
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    ctx.drawImage(src, 0, 0);
+    if (side === 'RS' && (isCur || (selected && selected.piece === P.name))) {
+      // in a band texture each row is stretched to full width, so stitch width varies by row
+      const ext = mesh.band ? rowExtents(P).map((e) => e.w) : null;
+      const W0 = ext ? Math.max(...ext) : 0;
+      const swFor = (r: number) => (ext ? (pxS * W0) / ext[Math.max(0, Math.min(P.nrows - 1, r))] : pxS);
+      drawOverlay(ctx, P, isCur ? progress : Infinity, selected, geo.X, geo.Y, swFor, pxR);
+    }
+    part.tex[side].needsUpdate = true;
+  }
+
+  private refreshTexture(name: string) {
+    const part = this.parts.find((p) => p.P.name === name);
+    if (part) { this.drawTexture(part, 'RS'); this.drawTexture(part, 'WS'); }
+  }
+
+  // ---------- camera ----------
+  private aspect() { const h = this.host; return h.clientWidth && h.clientHeight ? h.clientWidth / h.clientHeight : 1.3; }
+  private fitDist(w: number, h: number, fov: number) { const t = 2 * Math.tan((fov * Math.PI) / 360); return (Math.max(h, w / this.aspect()) * 1.12) / t; }
+  private camPreset(mode: ViewMode, focusBox?: Box): Cam {
+    if (mode === 'pieces') {
+      const b = focusBox || this.flatBounds || { x0: -20, x1: 20, z0: -20, z1: 20 };
+      return { target: new THREE.Vector3((b.x0 + b.x1) / 2, MAT_Y, (b.z0 + b.z1) / 2), dist: this.fitDist(b.x1 - b.x0, b.z1 - b.z0, 22), phi: 0.012, theta: 0, fov: 22 };
+    }
+    if (this.sim && this.sim.useTable) return { target: new THREE.Vector3(TABLE.c[0], TABLE.top - 4, TABLE.c[2] - 6), dist: 80 / Math.min(1, this.aspect() * 0.9), phi: 1.05, theta: 0.45, fov: 38 };
+    const P = this.posAligned; let mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9];
+    if (P) for (let i = 0; i < P.length; i += 3) for (let q = 0; q < 3; q++) { mn[q] = Math.min(mn[q], P[i + q]); mx[q] = Math.max(mx[q], P[i + q]); }
+    if (!(mx[0] > mn[0])) { mn = [-10, 0, -5]; mx = [10, 30, 5]; }
+    const c = mn.map((v, i) => (v + mx[i]) / 2);
+    if (mode === 'aligned') return { target: new THREE.Vector3(c[0], c[1], 0), dist: this.fitDist(mx[0] - mn[0] + 6, mx[1] - mn[1] + 6, 38), phi: 1.22, theta: 0.6, fov: 38 };
+    const size = Math.max(Math.min(mx[0] - mn[0], 42), mx[1] - mn[1], 12);
+    return { target: new THREE.Vector3(c[0] * 0.3, c[1] - (mx[1] - mn[1] > 20 ? 1.5 : 0), 0), dist: this.fitDist(size, size, 38), phi: 1.36, theta: 0.45, fov: 38 };
+  }
+  private tweenCam(to: Cam, dur = 1.3) {
+    const c = this.cam;
+    const from = { target: c.target.clone(), dist: c.dist, phi: c.phi, theta: c.theta, fov: c.fov };
+    let dTh = to.theta - from.theta; dTh = ((((dTh + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) - Math.PI;
+    this.camTween = { from, to: { ...to, theta: from.theta + dTh }, t0: performance.now(), dur: dur * 1000 };
+  }
+  private applyCam() {
+    const c = this.cam, cam = this.camera;
+    cam.position.set(c.target.x + c.dist * Math.sin(c.phi) * Math.sin(c.theta), c.target.y + c.dist * Math.cos(c.phi), c.target.z + c.dist * Math.sin(c.phi) * Math.cos(c.theta));
+    cam.fov = c.fov; cam.near = Math.max(0.5, c.dist * 0.02); cam.far = c.dist * 6 + 500; cam.updateProjectionMatrix();
+    cam.lookAt(c.target);
+  }
+
+  // ---------- modes + transitions ----------
+  private animateTo(target: Float32Array, lift: number, dur: number, done?: () => void) {
+    const from = new Float32Array(this.sim.pos); const n = this.parts.length;
+    this.tween = { from, to: target, lift, t0: performance.now(), dur: dur * 1000, stagger: Math.min(0.35, 0.6 / Math.max(1, n)), done };
+  }
+  private startSim() { this.sim.reset(); this.simT = 0; this.simRunning = true; this.updateStatus(); }
+  private applyFades(instant = false) {
+    const m = this.mode; const f = this.fades;
+    f.form.t = m === 'pieces' ? 0 : 1; f.mat.t = m === 'pieces' ? 1 : 0; f.labels.t = f.mat.t;
+    f.table.t = m !== 'pieces' && this.sim && this.sim.useTable ? 1 : 0;
+    if (instant) Object.values(f).forEach((x) => { x.v = x.t; });
+  }
+  private updateStatus() {
+    const s = this.sim; const el = this.statusEl; if (!s) return;
+    if (this.mode === 'pieces') { el.textContent = `${s.parts.length} piece${s.parts.length > 1 ? 's' : ''} on a 1″ grid. Drag to pan, pinch or scroll to zoom, twist with two fingers. Tap a stitch to inspect it.`; return; }
+    if (this.mode === 'aligned') { el.textContent = `Pieces lined up where they'll be sewn — red threads show which edges join. Drag to orbit.`; return; }
+    const T = this.simT; let txt: string;
+    if (!this.simRunning && this.posAssembled) txt = 'Assembled. Drag the fabric to pull it; drag elsewhere to orbit. Tap a stitch to inspect it.';
+    else {
+      const active = (this.doc!.seams || []).filter((x) => !x.hidden && s.stageOf(x.stage, T) > 0 && s.stageOf(x.stage, T) < 1).sort((a, b) => a.stage - b.stage);
+      const last = active[active.length - 1];
+      txt = last ? `Sewing: ${last.a} = ${last.b}` : T < s.tGrav + 1.5 ? 'Seams closed — letting it hang…' : 'Settling…';
+    }
+    if (el.textContent !== txt) el.textContent = txt;
+  }
+
+  private frame() {
+    const host = this.host; const w = host.clientWidth, h = host.clientHeight; if (!w || !h) return;
+    const R = this.R;
+    if (R.domElement.width !== Math.floor(w * R.getPixelRatio()) || R.domElement.height !== Math.floor(h * R.getPixelRatio())) {
+      R.setSize(w, h); this.camera.aspect = w / h; this.camera.updateProjectionMatrix();
+      if (!this.sized) { this.sized = true; Object.assign(this.cam, this.camPreset(this.mode)); }
+    }
+    const now = performance.now(); const dt = Math.min(0.1, (now - (this.lastT || now)) / 1000); this.lastT = now;
+    const s = this.sim;
+    if (s && this.tween) {
+      const tw = this.tween; const u = Math.min(1, (now - tw.t0) / tw.dur); const P = s.pos; const n = this.parts.length;
+      this.parts.forEach((part, i) => {
+        const span = n > 1 ? 1 - tw.stagger : 1;
+        const lu = n > 1 ? Math.min(1, Math.max(0, (u - (tw.stagger * i) / (n - 1)) / span)) : u;
+        const e = ease(lu); const up = Math.sin(Math.PI * e) * tw.lift;
+        const a = part.offset * 3, b = (part.offset + part.mesh.local.length) * 3;
+        for (let k = a; k < b; k += 3) {
+          P[k] = tw.from[k] + (tw.to[k] - tw.from[k]) * e;
+          P[k + 1] = tw.from[k + 1] + (tw.to[k + 1] - tw.from[k + 1]) * e + up;
+          P[k + 2] = tw.from[k + 2] + (tw.to[k + 2] - tw.from[k + 2]) * e;
+        }
+      });
+      this.markDirty();
+      if (u >= 1) { const d = tw.done; this.tween = null; d?.(); }
+    } else if (s && !this.simRunning && (s.grab || now < this.relaxUntil) && this.mode === 'assembled') {
+      for (let k = 0; k < 2; k++) s.step(1 / 60, { assembleT: Math.max(this.simT, s.settleT) });
+      this.markDirty(); this.updateGrabDot();
+    } else if (s && this.simRunning) {
+      for (let k = 0; k < 3; k++) { this.simT += 1 / 60; s.step(1 / 60, { assembleT: this.simT }); }
+      if (this.simT > s.settleT) { this.simRunning = false; this.posAssembled = new Float32Array(s.pos); }
+      this.markDirty(); this.updateStatus(); this.updateGrabDot();
+    }
+    // camera
+    if (this.camTween) {
+      const ct = this.camTween; const u = Math.min(1, (now - ct.t0) / ct.dur); const e = ease(u);
+      this.cam.target.lerpVectors(ct.from.target, ct.to.target, e);
+      this.cam.dist = ct.from.dist + (ct.to.dist - ct.from.dist) * e;
+      this.cam.phi = ct.from.phi + (ct.to.phi - ct.from.phi) * e;
+      this.cam.theta = ct.from.theta + (ct.to.theta - ct.from.theta) * e;
+      this.cam.fov = ct.from.fov + (ct.to.fov - ct.from.fov) * e;
+      if (u >= 1) this.camTween = null;
+    }
+    this.applyCam();
+    // fades
+    Object.values(this.fades).forEach((f) => {
+      f.v += (f.t - f.v) * Math.min(1, dt * 5); if (Math.abs(f.t - f.v) < 0.002) f.v = f.t;
+      f.mats.forEach((m, i) => { m.opacity = f.v * f.base[i]; m.visible = f.v > 0.01; });
+    });
+    // seam threads
+    if (s && this.seamAttr && this.seamLines && this.seamMat) {
+      const SS = s.seams, P = s.pos, A = this.seamAttr.array as Float32Array;
+      for (let i = 0; i < SS.length; i++) { A[i * 3] = P[SS[i] * 3]; A[i * 3 + 1] = P[SS[i] * 3 + 1]; A[i * 3 + 2] = P[SS[i] * 3 + 2]; }
+      this.seamAttr.needsUpdate = true;
+      this.seamLines.visible = this.showSeams && !(this.mode === 'assembled' && !this.simRunning && !this.tween);
+      this.seamMat.opacity = this.mode === 'pieces' ? 0.3 : 0.85;
+    }
+    if (this.dirtyTex.size && this.parts.length) { this.dirtyTex.forEach((n) => this.refreshTexture(n)); this.dirtyTex.clear(); }
+    R.render(this.scene, this.camera);
+  }
+
+  private updateGrabDot() {
+    const g = this.sim?.grab;
+    this.grabDot.visible = !!g;
+    if (g) this.grabDot.position.set(g.target[0], g.target[1], g.target[2]);
+  }
+
+  // ---------- input: 2D on the mat, orbit around the form ----------
+  private setupInput() {
+    const el = this.R.domElement; el.style.touchAction = 'none';
+    const pts = new Map<number, [number, number]>();
+    let last2: { d: number; ang: number; mid: [number, number] } | null = null, moved = 0, downAt: [number, number] | null = null;
+    let hoverT = 0;
+    const worldPerPx = () => (2 * this.cam.dist * Math.tan((this.cam.fov * Math.PI) / 360)) / el.clientHeight;
+    const pan = (dx: number, dy: number) => {
+      const k = worldPerPx(), th = this.cam.theta;
+      this.cam.target.x -= (Math.cos(th) * dx + Math.sin(th) * dy) * k;
+      this.cam.target.z -= (-Math.sin(th) * dx + Math.cos(th) * dy) * k;
+    };
+    const zoom = (f: number) => { const lim = this.mode === 'pieces' ? [6, 900] : [15, 260]; this.cam.dist = Math.min(lim[1], Math.max(lim[0], this.cam.dist * f)); };
+    const ray = (cx: number, cy: number) => {
+      const r = el.getBoundingClientRect();
+      this.raycaster.setFromCamera(new THREE.Vector2(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1), this.camera);
+      return this.raycaster;
+    };
+    const hits = (cx: number, cy: number) => (this.parts.length ? ray(cx, cy).intersectObjects(this.parts.flatMap((p) => p.meshes), false) : []);
+    let grabbing: { plane: THREE.Plane } | null = null;
+    const down = (e: PointerEvent) => {
+      el.setPointerCapture(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]); this.camTween = null; moved = 0; downAt = [e.clientX, e.clientY];
+      if (pts.size === 2) { last2 = null; if (grabbing) { this.sim.endGrab(); grabbing = null; } }
+      if (pts.size === 1 && this.mode === 'assembled' && this.sim && !this.tween) {
+        const h = hits(e.clientX, e.clientY)[0];
+        if (h && h.face) {
+          const part = h.object.userData.part as Part; const f = h.face; const P = this.sim.pos;
+          let best = f.a, bd = Infinity;
+          [f.a, f.b, f.c].forEach((v) => {
+            const gi = (part.offset + v) * 3;
+            const d = (P[gi] - h.point.x) ** 2 + (P[gi + 1] - h.point.y) ** 2 + (P[gi + 2] - h.point.z) ** 2;
+            if (d < bd) { bd = d; best = v; }
+          });
+          const g = this.sim.startGrab(part.offset + best);
+          if (g) {
+            const n = new THREE.Vector3(); this.camera.getWorldDirection(n);
+            grabbing = { plane: new THREE.Plane().setFromNormalAndCoplanarPoint(n, new THREE.Vector3(...(g.target as [number, number, number]))) };
+            el.style.cursor = 'grabbing';
+          }
+        }
+      }
+    };
+    const move = (e: PointerEvent) => {
+      if (!pts.has(e.pointerId)) {
+        if (e.pointerType !== 'mouse') return;
+        if (this.mode !== 'assembled') { el.style.cursor = this.mode === 'pieces' ? 'grab' : ''; return; }
+        if (++hoverT % 3) return;
+        el.style.cursor = hits(e.clientX, e.clientY).length ? 'grab' : '';
+        return;
+      }
+      const [px, py] = pts.get(e.pointerId)!; pts.set(e.pointerId, [e.clientX, e.clientY]);
+      const dx = e.clientX - px, dy = e.clientY - py; moved += Math.abs(dx) + Math.abs(dy);
+      if (pts.size === 1 && grabbing) {
+        const v = new THREE.Vector3();
+        if (ray(e.clientX, e.clientY).ray.intersectPlane(grabbing.plane, v)) { const t = this.sim.grab?.target; if (t) { t[0] = v.x; t[1] = v.y; t[2] = v.z; } }
+        return;
+      }
+      if (pts.size === 1) {
+        if (this.mode === 'pieces') pan(dx, dy);
+        else { this.cam.theta -= dx * 0.008; this.cam.phi = Math.min(2.9, Math.max(0.15, this.cam.phi - dy * 0.008)); }
+      } else if (pts.size === 2) {
+        const [a, b] = [...pts.values()];
+        const d = Math.hypot(a[0] - b[0], a[1] - b[1]), ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+        const mid: [number, number] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        if (last2) {
+          zoom(last2.d / d);
+          if (this.mode === 'pieces') {
+            let da = ang - last2.ang; da = Math.atan2(Math.sin(da), Math.cos(da)); this.cam.theta -= da;
+            pan(mid[0] - last2.mid[0], mid[1] - last2.mid[1]);
+          }
+        }
+        last2 = { d, ang, mid };
+      }
+    };
+    const up = (e: PointerEvent) => {
+      if (grabbing) { this.sim.endGrab(); grabbing = null; el.style.cursor = ''; this.relaxUntil = performance.now() + 4000; }
+      const was = pts.size; pts.delete(e.pointerId); if (pts.size < 2) last2 = null;
+      if (was === 1 && moved < 6 && downAt) this.pick(hits(e.clientX, e.clientY));
+    };
+    const cancel = (e: PointerEvent) => { pts.delete(e.pointerId); last2 = null; };
+    const wheel = (e: WheelEvent) => {
+      e.preventDefault(); this.camTween = null;
+      const pieces = this.mode === 'pieces';
+      if (e.ctrlKey || !pieces || (Math.abs(e.deltaY) > Math.abs(e.deltaX) * 2 && !e.shiftKey && e.deltaMode !== 0)) zoom(1 + e.deltaY * (e.ctrlKey ? 0.01 : 0.0012));
+      else if (Math.abs(e.deltaX) > 0.5 || e.shiftKey) pan(-e.deltaX, -e.deltaY);
+      else zoom(1 + e.deltaY * 0.0012);
+    };
+    el.addEventListener('pointerdown', down); el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up); el.addEventListener('pointercancel', cancel);
+    el.addEventListener('wheel', wheel, { passive: false });
+    this.cleanup.push(() => {
+      el.removeEventListener('pointerdown', down); el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', cancel); el.removeEventListener('wheel', wheel);
+    });
+  }
+
+  private pick(hits: THREE.Intersection[]) {
+    for (const h of hits) {
+      const st = this.uvToStitch(h.object.userData.part as Part, h.uv);
+      if (st) { this.cb.onPick(st); return; }
+    }
+  }
+
+  private uvToStitch(part: Part, uv?: THREE.Vector2): Stitch | null {
+    if (!uv) return null;
+    const P = part.P, m = part.mesh; let xs: number, ys: number;
+    if (m.band) {
+      ys = m.y0 + uv.y * m.H; const r = Math.max(0, Math.min(P.nrows - 1, Math.round(ys)));
+      let lo = Infinity, hi = -Infinity; P.rows[r].stitches.forEach((s) => { lo = Math.min(lo, s.x); hi = Math.max(hi, s.x); });
+      xs = lo - 0.5 + uv.x * (hi - lo + 1);
+    } else { xs = m.x0 + uv.x * m.W; ys = m.y0 + uv.y * m.H; }
+    const r = Math.round(ys); if (r < 0 || r >= P.nrows) return null;
+    let best: Stitch | null = null, bd = Infinity;
+    P.rows[r].stitches.forEach((s) => { const d = Math.abs(s.x - xs); if (d < bd) { bd = d; best = s; } });
+    if (!best || bd > 0.8) return null;
+    const { curPiece, progress } = this.knit;
+    if ((best as Stitch).piece === curPiece && progress < P.total && (best as Stitch).ord >= progress) return null; // not knitted yet
+    return best;
+  }
+}

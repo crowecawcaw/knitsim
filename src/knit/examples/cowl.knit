@@ -1,0 +1,24 @@
+pattern "Timeless Knit Cowl"
+source https://allfreeknitting.com/Cowls/Timeless-Knit-Cowl-Red-Heart
+# Free pattern by Christine Marie Chen for Red Heart. Worsted, US 8 circular.
+param circ float 20..36 = 26 "Circumference (in)"
+param main color = #c25a7c "Yarn"
+
+gauge 17 sts x 23 rows = 4 in
+yarn ${main}
+
+piece cowl round
+  cast_on ${even(circ * 17 / 4)}     # 110 sts at 26in; rib and seed need an even count
+  rows 6 rib1x1
+  rows 4in st
+  rows 3in seed
+  rows 4in st
+  rows 3in seed
+  rows 4in st
+  rows 6 rib1x1
+  bind_off
+end
+
+assemble
+  place cowl at neck
+end

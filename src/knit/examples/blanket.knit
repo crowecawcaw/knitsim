@@ -1,0 +1,28 @@
+pattern "Easy Garter Stripe Baby Blanket"
+source https://gina-michele.com/2026/06/17/easy-baby-blanket-knitting-pattern/
+# Free pattern by Gina Michele. Super bulky yarn.
+param stripes int 4..14 = 10 "Stripe pairs"
+param border int 3..10 = 6 "Border sts"
+param main color = #8db4cc "Yarn"
+param band color = #8db4cc "Garter stripes"
+
+gauge 12 sts x 16 rows = 4 in
+yarn ${main}
+
+piece blanket
+  cast_on 80
+  repeat ${stripes} {
+    yarn ${band}
+    rows 2in garter
+    yarn ${main}
+    rows 2in garter:${border} st garter:${border}   # stockinette with a garter border
+  }
+  yarn ${band}
+  rows 2in garter                   # end with a garter section
+  expect 80
+  bind_off
+end
+
+assemble
+  place blanket at table
+end

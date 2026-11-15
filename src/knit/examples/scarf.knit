@@ -1,0 +1,24 @@
+pattern "Toasty Scarf"
+source https://bromefields.com/easy-scarf-knitting-pattern
+# Free pattern by Jennifer, Brome Fields. Super bulky yarn.
+# Width and length are parameters: the cast-on is worked out from your gauge.
+param width float 6..14 = 9 "Width (in)"
+param length float 40..100 = 86 "Length (in)"
+param sts float 6..12 = 8.5 "Gauge: sts / 4in"
+param rows float 10..18 = 14 "Gauge: rows / 4in"
+param needle enum "US 11" "US 13" "US 15" = "US 13" "Needles"
+param main color = #a3492f "Yarn"
+
+gauge ${sts} sts x ${rows} rows = 4 in
+yarn ${main}
+
+piece scarf
+  cast_on ${odd(width * sts / 4)}           # odd count keeps moss symmetric
+  # slip the first and last st with yarn in front; moss stitch between
+  rows until ${length}in edge:1 moss edge:1
+  bind_off
+end
+
+assemble
+  place scarf at scarf
+end
