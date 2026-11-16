@@ -173,3 +173,67 @@ SYNTAX.md was revised after this trial. Cross-cutting rules are in its new "Sema
 - Start-of-round marker moved mid-piece (CA sleeves): only at a `join`, by splitting a part with a range.
 - Placed increases written as `inc N evenly`: use a written row for exact positions.
 - Long `fabric:count` lists (CR): after the first row, sticky per-part fabric makes later rows short. No panel macro was added.
+
+## Round 2: the revised spec
+
+The same 10 patterns were translated again from scratch by Haiku, against the revised SYNTAX.md. Each translator then
+sorted every tag from round 1 into resolved, still open, or made worse. This round also asked for full chart
+transcription (DN, WL) and Carousel's per-size yoke table.
+
+| Pattern | Round 1 | Round 2 | Notes |
+|---|---|---|---|
+| Wheel of Life | 55% | 90% | both charts transcribed |
+| Date Night | 60% | 80% | both charts transcribed; 5 chart rounds left as placeholders |
+| Carousel | 50% | 75% | yoke rows 1–42 for all 9 sizes are now complete |
+| Lazy Day | 90% | 95% | |
+| Checked Raglan | 85% | 90% | |
+| Classic Turtleneck | 95% | 90% | corrected two round-1 mistakes |
+| Sampson Lila | 85% | 85% | the remaining gaps are mostly the pattern's own errata |
+| Third Coast | 85% | 85% | fixed round-1 count and placement errors |
+| Simple Soft Baby | 85% | 85% | |
+| Cute Casual Cardigan | 80% | 80% | |
+| **Average** | **76%** | **86%** | |
+
+Round-1 tags (103):
+
+- **67 resolved** (65%).
+- **36 still open.** 17 of them are in the two chart patterns, and several are pattern ambiguities ("desired length", errata).
+- **1 made worse**: re-declaring `sections` drops the name of a cast-on edge.
+- **49 new tags.** Most are finer-grained, the kind of question that only comes up once the bigger gaps are closed.
+- **0 invented syntax.**
+
+### Remaining problems by theme
+
+1. **Rows with several shaping places.** This was the most common new friction.
+   - Raglan rounds need asymmetric insets (M1R on the marker, M1L one stitch in), and each place has to be written as its own item.
+   - It's unstated how a `using` pair alternates over explicit places, and whether touching places merge.
+   - Purl-side M1PR/M1PL are needed on WS rows.
+   - It's unclear what `SECTION.start`/`end` means on a WS row.
+   - Idea: allow marker tokens in written rows, so `"*k to 1 before m, m1r, k1, sm, k1, m1l*"` reads exactly like the pattern.
+2. **Start of the round.**
+   - The start can't be moved (CA, TC divide at the underarm).
+   - A chart can't start mid-round alongside knit sections (DN).
+   - Sub-ranges of a chart had to be copied as separate charts.
+   - Need: `round_start at SECTION.start`, and a chart offset (`row 25 of chart`) for a part of a row.
+3. **Phase.**
+   - Rib phase is still missing (`rib2x2` that starts with p2).
+   - It's unclear whether `st` restarts its RS/WS phase after a written row.
+   - `mirrored` doesn't say how the RS/WS phase works.
+   - Does a fold happen on the marker row or the row after it?
+   - Rounds can't be worked WS-out (a turned cowl).
+4. **Held stitches and edges.**
+   - Held counts can't be checked with `expect`.
+   - A pick-up from a cast-on edge that now sits inside a held section may not resolve.
+   - Split halves have no markers for side-seam ranges.
+   - `resume` versus `from MARKER` lengths is unclear.
+   - The sleeve cap has no named edge.
+5. **`repeat until`.** It stops after any row. Patterns sometimes mean "after whole repeats", so both are needed (`until … at block end`).
+6. **Partial measurements.** You can't assert yoke depth, upper arm, cuff, or chest across a folded one-piece garment. `expect width` only measures a whole row.
+7. **Small vocabulary gaps.**
+   - `p2togtbl`;
+   - a slipped edge on WS rows only;
+   - a reversed seam for a turned-back collar;
+   - needle labels per section;
+   - graft pairing;
+   - finishing and blocking.
+8. **Charts are expensive.** Transcribing the DN and WL charts from images took about 55 tool calls. The errors included a row offset, misread symbols, and columns off by one, all caught only by pixel checks and row-balance arithmetic. The syntax is fine. The cost is input, and that argues for chart tooling: an in-app chart editor, or image-assisted entry with row-balance validation.
