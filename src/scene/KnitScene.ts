@@ -13,6 +13,7 @@ const LEGACY_LIGHT = Math.PI;
 const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 const MAT_Y = -16;
 
+export interface Insets { l: number; r: number; t: number; b: number }
 export interface KnitState { curPiece: string | null; progress: number; selected: Stitch | null }
 
 interface Cam { target: THREE.Vector3; dist: number; phi: number; theta: number; fov: number }
@@ -58,6 +59,7 @@ export class KnitScene {
   private camTween: { from: Cam; to: Cam; t0: number; dur: number } | null = null;
   private cam: Cam = { target: new THREE.Vector3(0, MAT_Y, 0), dist: 80, phi: 0.01, theta: 0, fov: 22 };
   private camSet = false; private sized = false;
+  private insets: Insets = { l: 0, r: 0, t: 0, b: 0 };
   private simRunning = false; private simT = 0; private relaxUntil = 0; private lastT = 0;
   private raf = 0;
   private cleanup: (() => void)[] = [];
@@ -67,7 +69,7 @@ export class KnitScene {
     R.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     host.prepend(R.domElement);
     const scene = this.scene;
-    scene.background = new THREE.Color('#efe6d8');
+    scene.background = new THREE.Color('#f6f4f1');
     scene.add(new THREE.HemisphereLight(0xfff6e8, 0x8a7a68, 0.9 * LEGACY_LIGHT));
     const d1 = new THREE.DirectionalLight(0xffffff, 0.8 * LEGACY_LIGHT); d1.position.set(20, 60, 35); scene.add(d1);
     const d2 = new THREE.DirectionalLight(0xffe2c4, 0.3 * LEGACY_LIGHT); d2.position.set(-30, 10, -20); scene.add(d2);
@@ -96,10 +98,10 @@ export class KnitScene {
     scene.add(table);
     // cutting mat with a 1-inch grid
     const mc = document.createElement('canvas'); mc.width = mc.height = 512; const mx = mc.getContext('2d')!;
-    mx.fillStyle = '#3f6b5c'; mx.fillRect(0, 0, 512, 512);
+    mx.fillStyle = '#ece7e0'; mx.fillRect(0, 0, 512, 512);
     for (let i = 0; i <= 12; i++) {
       const p = (i * 512) / 12;
-      mx.strokeStyle = i % 6 === 0 ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.22)'; mx.lineWidth = i % 6 === 0 ? 2.5 : 1.2;
+      mx.strokeStyle = i % 6 === 0 ? 'rgba(120,100,80,0.28)' : 'rgba(120,100,80,0.13)'; mx.lineWidth = i % 6 === 0 ? 2.5 : 1.2;
       mx.beginPath(); mx.moveTo(p, 0); mx.lineTo(p, 512); mx.moveTo(0, p); mx.lineTo(512, p); mx.stroke();
     }
     const mtex = (this.mtex = new THREE.CanvasTexture(mc));
@@ -137,6 +139,13 @@ export class KnitScene {
   }
 
   setShowSeams(v: boolean) { this.showSeams = v; }
+
+  /** Screen space (px) covered by floating UI; the camera frames the knit in the rest. */
+  setInsets(i: Insets) {
+    const k = [i.l, i.r, i.t, i.b].join();
+    if (k === [this.insets.l, this.insets.r, this.insets.t, this.insets.b].join()) return;
+    this.insets = i; this.sized = false;
+  }
 
   fit(dur = 0.8) { this.tweenCam(this.camPreset(this.mode), dur); }
 
@@ -205,8 +214,8 @@ export class KnitScene {
       this.group!.add(a, b); Object.assign(part, { g, attr, meshes: [a, b], idx });
       // label on the mat
       const lc = document.createElement('canvas'); lc.width = 512; lc.height = 96; const lx = lc.getContext('2d')!;
-      lx.fillStyle = 'rgba(255,255,255,0.92)'; lx.font = '600 44px "IBM Plex Mono", monospace'; lx.fillText(part.P.name, 6, 46);
-      lx.font = '400 30px "IBM Plex Sans", sans-serif'; lx.fillStyle = 'rgba(255,255,255,0.7)';
+      lx.fillStyle = 'rgba(35,32,29,0.88)'; lx.font = '800 44px Nunito, sans-serif'; lx.fillText(part.P.name.replace(/_/g, ' '), 6, 46);
+      lx.font = '600 30px Nunito, sans-serif'; lx.fillStyle = 'rgba(35,32,29,0.5)';
       lx.fillText(`${part.P.widthIn.toFixed(1)}″ × ${part.P.heightIn.toFixed(1)}″ · ${part.P.nrows - 1} rows`, 6, 86);
       const lt = new THREE.CanvasTexture(lc); lt.colorSpace = THREE.SRGBColorSpace;
       const lm = new THREE.MeshBasicMaterial({ map: lt, transparent: true, depthWrite: false });
@@ -309,8 +318,32 @@ export class KnitScene {
   }
 
   // ---------- camera ----------
-  private aspect() { const h = this.host; return h.clientWidth && h.clientHeight ? h.clientWidth / h.clientHeight : 1.3; }
-  private fitDist(w: number, h: number, fov: number) { const t = 2 * Math.tan((fov * Math.PI) / 360); return (Math.max(h, w / this.aspect()) * 1.12) / t; }
+  /** Size of the free area not covered by floating UI. */
+  private free() {
+    const h = this.host, i = this.insets;
+    const W = h.clientWidth, H = h.clientHeight;
+    if (!W || !H) return { w: 1.3, h: 1, W: 1.3, H: 1 };
+    const fw = W - i.l - i.r, fh = H - i.t - i.b;
+    return fw > W * 0.35 && fh > H * 0.35 ? { w: fw, h: fh, W, H } : { w: W, h: H, W, H };
+  }
+  private aspect() { const f = this.free(); return f.w / f.h; }
+  private fitDist(w: number, h: number, fov: number) {
+    const t = 2 * Math.tan((fov * Math.PI) / 360); const f = this.free();
+    // the vertical fov spans the whole (virtual) frame, of which the free area is f.h
+    const vH = f.H + Math.abs(this.offY());
+    return (Math.max(h, w / this.aspect()) * 1.12 * (vH / f.h)) / t;
+  }
+  private offX() { const f = this.free(); return f.w === f.W ? 0 : this.insets.l - this.insets.r; }
+  private offY() { const f = this.free(); return f.h === f.H ? 0 : this.insets.t - this.insets.b; }
+  /** Shift the projection so its centre sits in the middle of the free area. */
+  private applyViewOffset(w: number, h: number) {
+    const dx = this.offX(), dy = this.offY();
+    const FW = w + Math.abs(dx), FH = h + Math.abs(dy);
+    this.camera.aspect = FW / FH;
+    if (dx || dy) this.camera.setViewOffset(FW, FH, dx < 0 ? -dx : 0, dy < 0 ? -dy : 0, w, h);
+    else this.camera.clearViewOffset();
+    this.camera.updateProjectionMatrix();
+  }
   private camPreset(mode: ViewMode, focusBox?: Box): Cam {
     if (mode === 'pieces') {
       const b = focusBox || this.flatBounds || { x0: -20, x1: 20, z0: -20, z1: 20 };
@@ -352,14 +385,14 @@ export class KnitScene {
   }
   private updateStatus() {
     const s = this.sim; const el = this.statusEl; if (!s) return;
-    if (this.mode === 'pieces') { el.textContent = `${s.parts.length} piece${s.parts.length > 1 ? 's' : ''} on a 1″ grid. Drag to pan, pinch or scroll to zoom, twist with two fingers. Tap a stitch to inspect it.`; return; }
-    if (this.mode === 'aligned') { el.textContent = `Pieces lined up where they'll be sewn — red threads show which edges join. Drag to orbit.`; return; }
+    if (this.mode === 'pieces') { el.textContent = `${s.parts.length} piece${s.parts.length > 1 ? 's' : ''} on a 1″ grid · drag to pan, scroll to zoom, tap a stitch`; return; }
+    if (this.mode === 'aligned') { el.textContent = `Pieces lined up where they'll be sewn · drag to orbit`; return; }
     const T = this.simT; let txt: string;
-    if (!this.simRunning && this.posAssembled) txt = 'Assembled. Drag the fabric to pull it; drag elsewhere to orbit. Tap a stitch to inspect it.';
+    if (!this.simRunning && this.posAssembled) txt = 'Drag the fabric to tug it · drag around it to orbit';
     else {
       const active = (this.doc!.seams || []).filter((x) => !x.hidden && s.stageOf(x.stage, T) > 0 && s.stageOf(x.stage, T) < 1).sort((a, b) => a.stage - b.stage);
       const last = active[active.length - 1];
-      txt = last ? `Sewing: ${last.a} = ${last.b}` : T < s.tGrav + 1.5 ? 'Seams closed — letting it hang…' : 'Settling…';
+      txt = last ? `Sewing the ${last.a.split('.')[0].replace(/_/g, ' ')} in place…` : T < s.tGrav + 1.5 ? 'Seams closed — letting it hang…' : 'Settling…';
     }
     if (el.textContent !== txt) el.textContent = txt;
   }
@@ -367,8 +400,8 @@ export class KnitScene {
   private frame() {
     const host = this.host; const w = host.clientWidth, h = host.clientHeight; if (!w || !h) return;
     const R = this.R;
-    if (R.domElement.width !== Math.floor(w * R.getPixelRatio()) || R.domElement.height !== Math.floor(h * R.getPixelRatio())) {
-      R.setSize(w, h); this.camera.aspect = w / h; this.camera.updateProjectionMatrix();
+    if (!this.sized || R.domElement.width !== Math.floor(w * R.getPixelRatio()) || R.domElement.height !== Math.floor(h * R.getPixelRatio())) {
+      R.setSize(w, h); this.applyViewOffset(w, h);
       if (!this.sized) { this.sized = true; Object.assign(this.cam, this.camPreset(this.mode)); }
     }
     const now = performance.now(); const dt = Math.min(0.1, (now - (this.lastT || now)) / 1000); this.lastT = now;

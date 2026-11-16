@@ -25,7 +25,11 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer({ doc, mod
     const s = new KnitScene(host.current!, status.current!, { onPick: (st) => onPickRef.current(st) });
     s.mode = mode; // initial mode from the URL, no transition
     scene.current = s;
-    return () => { s.dispose(); scene.current = null; };
+    // floating cards cover the left edge and the bottom dock on wide screens
+    const mq = window.matchMedia('(min-width: 861px)');
+    const insets = () => s.setInsets(mq.matches ? { l: 330, r: 0, t: 40, b: 130 } : { l: 0, r: 0, t: 0, b: 0 });
+    insets(); mq.addEventListener('change', insets);
+    return () => { mq.removeEventListener('change', insets); s.dispose(); scene.current = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

@@ -47,50 +47,51 @@ export function KnitControls({ piece: P, progress, setProgress, onInspect }: Pro
     setPlaying(!playing);
   };
 
+  const pct = total ? (prog / total) * 100 : 0;
   return (
-    <>
-      <div className="scrub">
-        <input type="range" id="scrub" min={0} max={total} value={prog} aria-label="Knitting progress" onChange={(e) => setProgress(+e.target.value)} />
+    <div className="player card">
+      <button className="play" aria-label={playing ? 'Pause' : 'Knit'} title={playing ? 'Pause' : 'Knit'} onClick={togglePlay}>
+        {playing
+          ? <svg viewBox="0 0 24 24" width="22" height="22"><rect x="6" y="5" width="4" height="14" rx="1.2" fill="currentColor" /><rect x="14" y="5" width="4" height="14" rx="1.2" fill="currentColor" /></svg>
+          : <svg viewBox="0 0 24 24" width="22" height="22"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z" fill="currentColor" /></svg>}
+      </button>
+      <div className="player-main">
+        <div className="player-top">
+          <div className="rowinfo" id="rowinfo"><RowInfo P={P} progress={progress} onInspect={onInspect} /></div>
+          <div className="steppers">
+            <button className="icon-btn small" title="Previous row" aria-label="Previous row" onClick={rowPrev}>⏮</button>
+            <button className="icon-btn small" title="Previous stitch" aria-label="Previous stitch" onClick={() => setProgress(Math.max(0, prog - 1))}>‹</button>
+            <button className="icon-btn small" title="Next stitch" aria-label="Next stitch" onClick={() => setProgress(Math.min(total, prog + 1))}>›</button>
+            <button className="icon-btn small" title="Next row" aria-label="Next row" onClick={rowNext}>⏭</button>
+            <button className="speed" title="Playback speed" onClick={() => setSpeed(speed >= 32 ? 2 : speed * 2)}>{speed / 8}×</button>
+          </div>
+        </div>
+        <input type="range" id="scrub" className="scrub" min={0} max={total} value={prog} aria-label="Knitting progress"
+          style={{ ['--pct' as string]: pct + '%' }} onChange={(e) => setProgress(+e.target.value)} />
       </div>
-      <div className="ctrls">
-        <button className="btn" title="Previous row" onClick={rowPrev}>⏮ row</button>
-        <button className="btn" title="Previous stitch" onClick={() => setProgress(Math.max(0, prog - 1))}>◀ st</button>
-        <button className="btn primary" onClick={togglePlay}>{playing ? '❚❚ Pause' : '▶ Knit'}</button>
-        <button className="btn" title="Next stitch" onClick={() => setProgress(Math.min(total, prog + 1))}>st ▶</button>
-        <button className="btn" title="Next row" onClick={rowNext}>row ⏭</button>
-        <label>speed <input type="range" min={1} max={60} value={speed} style={{ width: 70 }} onChange={(e) => setSpeed(+e.target.value)} /></label>
-        <span id="scrubLabel">{P ? `${P.name}: ${prog.toLocaleString()} / ${total.toLocaleString()} sts` : ''}</span>
-      </div>
-      <div className="gap" />
-      <div className="card" id="rowinfo"><RowInfo P={P} progress={progress} onInspect={onInspect} /></div>
-    </>
+    </div>
   );
 }
 
 function RowInfo({ P, progress, onInspect }: { P: Piece | null; progress: number; onInspect: (st: Stitch) => void }) {
-  if (!P) return <>No pieces yet.</>;
+  if (!P) return <span className="muted">Nothing to knit yet.</span>;
+  const name = P.name.replace(/_/g, ' ');
   if (progress >= P.total) {
     return (
       <>
-        <b>{P.name} finished</b> — {P.nrows - 1} rows, {P.total.toLocaleString()} stitches, {P.widthIn.toFixed(1)}″ × {P.heightIn.toFixed(1)}″.
-        {P.top && ` ${P.gather ? 'Gathered' : 'Bound off'} ${P.top.map((s) => s.length).join(' + ')} sts.`}
-        <br /><span className="muted">Drag the slider back to watch it knit, needles and all. Tap any stitch on any piece to inspect it.</span>
+        <b className="cap">{name}</b> <span className="muted">· finished · {P.nrows - 1} rows · {P.widthIn.toFixed(1)}″ × {P.heightIn.toFixed(1)}″</span>
+        <div className="muted small">Press play to watch it knit, or tap any stitch to see how it's made.</div>
       </>
     );
   }
-  const { row, nextSt, worked, parents } = needleState(P, progress);
-  const rtl = row.dir !== 'WS';
+  const { row, nextSt } = needleState(P, progress);
   return (
     <>
-      <b>{row.desc}</b><br />
-      Next: <b>{stitchName(nextSt, P)}</b> — stitch {progress - row.firstOrd + 1} of {row.stitches.length},{' '}
-      {row.dir === 'CO' ? 'casting on' : `working ${rtl ? 'right → left' : 'left → right'} as seen from the right side`}.<br />
-      <span className="muted">
-        Right needle holds {worked.length}; left needle holds {parents.size}. Line {row.line} ·{' '}
-        <a href="#" onClick={(e) => { e.preventDefault(); if (nextSt) onInspect(nextSt); document.getElementById('inspector')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }}>
-          how is this stitch made?
-        </a>
-      </span>
+      <b className="cap">{name}</b> <span className="muted">· {row.desc}</span>
+      <div className="muted small">
+        Next: {stitchName(nextSt, P)}, stitch {progress - row.firstOrd + 1} of {row.stitches.length} ·{' '}
+        <a href="#" onClick={(e) => { e.preventDefault(); if (nextSt) onInspect(nextSt); }}>how is it made?</a>
+      </div>
     </>
   );
 }
