@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { BODY, TABLE, makeSim, type KnitDoc, type Piece, type Stitch } from '../knit';
 import { drawOverlay, drawPiece, rowExtents, type Side } from '../draw/stitches';
 import type { ViewMode } from '../urlState';
+import { YarnPart, yarnMaterial, type YarnLod } from './yarn';
 
 // Match the look of the original (three r147, legacy lighting): hex colours are
 // used as-is and lights are scaled from the old intensity units.
@@ -26,6 +27,7 @@ interface Part {
   P: Piece; mesh: any; offset: number; idx: number;
   canvas: Record<Side, HTMLCanvasElement>; tex: Record<Side, THREE.CanvasTexture>; scratch?: HTMLCanvasElement;
   g: THREE.BufferGeometry; attr: THREE.BufferAttribute; meshes: THREE.Mesh[]; flatBox: Box;
+  yarn: YarnPart;
 }
 
 export interface SceneCallbacks {
@@ -62,6 +64,7 @@ export class KnitScene {
   private insets: Insets = { l: 0, r: 0, t: 0, b: 0 };
   private simRunning = false; private simT = 0; private relaxUntil = 0; private lastT = 0;
   private raf = 0;
+  private yarnMat = yarnMaterial(); private yarnLod: YarnLod = 'off';
   private cleanup: (() => void)[] = [];
 
   constructor(private host: HTMLElement, private statusEl: HTMLElement, private cb: SceneCallbacks) {
@@ -125,6 +128,7 @@ export class KnitScene {
     cancelAnimationFrame(this.raf);
     this.cleanup.forEach((f) => f());
     this.disposeGroup();
+    this.yarnMat.dispose();
     this.R.dispose();
     this.R.domElement.remove();
   }
@@ -212,6 +216,9 @@ export class KnitScene {
       const mB = new THREE.MeshStandardMaterial({ map: part.tex.WS, bumpMap: part.tex.WS, bumpScale: 0.25, roughness: 0.95, alphaTest: 0.4, side: THREE.BackSide, color: 0xe6dccd });
       const a = new THREE.Mesh(g, mF), b = new THREE.Mesh(g, mB); a.userData.part = b.userData.part = part;
       this.group!.add(a, b); Object.assign(part, { g, attr, meshes: [a, b], idx });
+      part.yarn = new YarnPart(part.P, part.mesh, part.offset, doc.built.sg, doc.built.rg, this.yarnMat);
+      part.yarn.setState(...this.yarnState(part.P));
+      this.group!.add(part.yarn.meshes.hi, part.yarn.meshes.lo);
       // label on the mat
       const lc = document.createElement('canvas'); lc.width = 512; lc.height = 96; const lx = lc.getContext('2d')!;
       lx.fillStyle = 'rgba(35,32,29,0.88)'; lx.font = '800 44px Nunito, sans-serif'; lx.fillText(part.P.name.replace(/_/g, ' '), 6, 46);
@@ -272,7 +279,7 @@ export class KnitScene {
   }
 
   private markDirty() {
-    this.parts.forEach((p) => { p.attr.needsUpdate = true; p.g.computeVertexNormals(); p.g.computeBoundingSphere(); });
+    this.parts.forEach((p) => { p.attr.needsUpdate = true; p.g.computeVertexNormals(); p.g.computeBoundingSphere(); p.yarn.dirty = true; });
   }
 
   // ---------- textures ----------
@@ -314,7 +321,7 @@ export class KnitScene {
 
   private refreshTexture(name: string) {
     const part = this.parts.find((p) => p.P.name === name);
-    if (part) { this.drawTexture(part, 'RS'); this.drawTexture(part, 'WS'); }
+    if (part) { this.drawTexture(part, 'RS'); this.drawTexture(part, 'WS'); part.yarn.setState(...this.yarnState(part.P)); }
   }
 
   // ---------- camera ----------
@@ -454,7 +461,27 @@ export class KnitScene {
       this.seamMat.opacity = this.mode === 'pieces' ? 0.3 : 0.85;
     }
     if (this.dirtyTex.size && this.parts.length) { this.dirtyTex.forEach((n) => this.refreshTexture(n)); this.dirtyTex.clear(); }
+    this.updateYarn(h);
     R.render(this.scene, this.camera);
+  }
+
+  private yarnState(P: Piece): [number | null, number | null] {
+    const { curPiece, progress, selected } = this.knit;
+    return [P.name === curPiece && progress < P.total ? progress : null, selected && selected.piece === P.name ? selected.id : null];
+  }
+
+  /** Real yarn when stitches are big enough on screen to read; the flat texture alone when they are not. */
+  private updateYarn(hPx: number) {
+    if (!this.doc || !this.sim) return;
+    const pxPerIn = hPx / (2 * this.cam.dist * Math.tan((this.cam.fov * Math.PI) / 360));
+    const stitchPx = pxPerIn / this.doc.built.sg;
+    const lod: YarnLod = stitchPx < 2.5 ? 'off' : stitchPx < 9 ? 'lo' : 'hi';
+    if (lod !== this.yarnLod) {
+      this.yarnLod = lod;
+      // the cloth becomes the shadowed gaps between strands
+      this.parts.forEach((p) => p.meshes.forEach((m, i) => (m.material as THREE.MeshStandardMaterial).color.set(lod === 'off' ? (i ? 0xe6dccd : 0xffffff) : (i ? 0x6f665c : 0x7a7068))));
+    }
+    this.parts.forEach((p) => { p.yarn.setLod(lod); if (lod !== 'off' && p.yarn.dirty) p.yarn.update(this.sim.pos); });
   }
 
   private updateGrabDot() {
