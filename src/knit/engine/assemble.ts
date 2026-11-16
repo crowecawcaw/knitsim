@@ -14,6 +14,8 @@ export const SPOTS = new Set(['front', 'back', 'left_arm', 'right_arm', 'neck', 
   'torso', 'front_left', 'front_right', 'shoulders', 'left_hand', 'right_hand', 'left_foot', 'right_foot', 'waist', 'left_leg', 'right_leg', 'crotch']);
 const METHODS = new Set(['mattress', 'whip', 'backstitch', 'graft', '3needle', 'tie', 'zipper', 'buttons']);
 
+const CLOSED_CAST_ONS = new Set(['judys', 'judy', 'magic', 'turkish', 'figure8', 'figure_8']);
+
 export function assemble(doc, G) {
   const built = doc.built; const errors = doc.errors; const checks = doc.checks;
   const seams = []; const placed = {}; const pairs = {};
@@ -46,12 +48,15 @@ export function assemble(doc, G) {
     (P.pickups || []).forEach((pu) => { const s = auto(pu.own, pu.expr, pu.line, 'pickup', { n: pu.n }); if (s) s.srcPieces = new Set(s.B.map((x) => x.piece)); });
     (P.links || []).forEach((l) => { const s = auto(l.a, l.b, l.line, 'join', false); if (s) s.stage = 0; });
     if (P.folded && P.folded.joinRow != null) { const s = auto(`${P.name}.bottom`, `${P.name}.row[${P.folded.joinRow}]`, P.folded.line, 'hem', false); if (s) { s.stage = 0; s.hidden = true; } }
-    if (P.closed) {
+    // a closed top (close), or a closed cast-on (Judy's, Turkish, figure-8): the edge's two halves meet
+    const closeEdge = (edge, line) => {
       try {
-        const top = edgeOf(built, `${P.name}.top`); const pts = top[0].pts; const h = Math.floor(pts.length / 2);
-        seams.push({ a: `${P.name}.top`, b: '(closed)', A: [{ piece: P.name, pts: pts.slice(0, h + 1) }], B: [{ piece: P.name, pts: pts.slice(h).reverse() }], level: 'ok', stage: 0, hidden: true, auto: true, kind: 'close' });
-      } catch (e) { errors.push({ line: P.closed.line, msg: e.message, level: 'error' }); }
-    }
+        const e = edgeOf(built, `${P.name}.${edge}`); const pts = e[0].pts; const h = Math.floor(pts.length / 2);
+        seams.push({ a: `${P.name}.${edge}`, b: '(closed)', A: [{ piece: P.name, pts: pts.slice(0, h + 1) }], B: [{ piece: P.name, pts: pts.slice(h).reverse() }], level: 'ok', stage: 0, hidden: true, auto: true, kind: 'close' });
+      } catch (e) { errors.push({ line, msg: e.message, level: 'error' }); }
+    };
+    if (P.closed) closeEdge('top', P.closed.line);
+    if (P.mode !== 'flat' && CLOSED_CAST_ONS.has(P.coMethod)) closeEdge(P.topDown ? 'top' : 'bottom', P.coLine);
   });
   // assembly order = the order of the written seams; pick-ups join right after their sources are sewn
   let k = 0; seams.forEach((s) => { if (!s.auto) s.stage = k++; });
@@ -64,7 +69,7 @@ export function assemble(doc, G) {
   });
   built.order.forEach((P) => {
     if (P.round && P.nrows) {
-      try { seams.push({ a: `${P.name}.left`, b: `${P.name}.right`, A: edgeOf(built, `${P.name}.left`), B: edgeOf(built, `${P.name}.right`), hidden: true, level: 'ok', stage: 0, auto: true }); }
+      try { seams.push({ a: `${P.name}.left`, b: `${P.name}.right`, A: edgeOf(built, `${P.name}.left`), B: edgeOf(built, `${P.name}.right`), hidden: true, level: 'ok', stage: 0, auto: true, kind: 'round' }); }
       catch { /* a round piece with no rows */ }
     }
   });

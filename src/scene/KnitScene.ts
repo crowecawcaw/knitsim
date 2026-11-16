@@ -2,8 +2,9 @@
 // Imperative three.js code; React drives it through the public methods.
 import * as THREE from 'three';
 import { BODY, TABLE, makeSim, type KnitDoc, type Piece, type Stitch } from '../knit';
-import { drawOverlay, drawPiece, rowExtents, type Side } from '../draw/stitches';
+import { drawOverlay, pieceXY, rowExtents } from '../draw/stitches';
 import type { ViewMode } from '../urlState';
+import { fabricMaterials, setFabricState, type FabricMats } from './fabric';
 
 // Match the look of the original (three r147, legacy lighting): hex colours are
 // used as-is and lights are scaled from the old intensity units.
@@ -13,6 +14,7 @@ const LEGACY_LIGHT = Math.PI;
 const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 const MAT_Y = -16;
 
+export interface Insets { l: number; r: number; t: number; b: number }
 export interface KnitState { curPiece: string | null; progress: number; selected: Stitch | null }
 
 interface Cam { target: THREE.Vector3; dist: number; phi: number; theta: number; fov: number }
@@ -23,8 +25,48 @@ interface Fade { v: number; t: number; mats: THREE.Material[]; base: number[] }
 type Sim = any; // returned by makeSim (untyped engine)
 interface Part {
   P: Piece; mesh: any; offset: number; idx: number;
-  canvas: Record<Side, HTMLCanvasElement>; tex: Record<Side, THREE.CanvasTexture>; scratch?: HTMLCanvasElement;
+  canvas: HTMLCanvasElement; tex: THREE.CanvasTexture;
   g: THREE.BufferGeometry; attr: THREE.BufferAttribute; meshes: THREE.Mesh[]; flatBox: Box;
+  fab: FabricMats; shells: THREE.Mesh[];
+  /** stitch-graph parts: render vertex → sim vertex, and the indexed sim mesh used for normals */
+  map?: Int32Array; gi?: THREE.BufferGeometry;
+}
+
+/** Capsules drawn as soft see-through solids (the dress form, the foot forms). */
+function capsuleGroup(caps: any[], mat: THREE.Material) {
+  const form = new THREE.Group();
+  caps.filter((c) => !c.hidden).forEach((c) => {
+    const a = new THREE.Vector3(...(c.a as [number, number, number])), b = new THREE.Vector3(...(c.b as [number, number, number]));
+    const L = a.distanceTo(b); const g = new THREE.Group();
+    if (L > 0.01) g.add(new THREE.Mesh(new THREE.CylinderGeometry(c.rb, c.ra, L, 24, 1, true), mat));
+    [a, b].forEach((_p, i) => {
+      const sp = new THREE.Mesh(new THREE.SphereGeometry(i ? c.rb : c.ra, 24, 16), mat);
+      sp.position.set(0, (i ? 0.5 : -0.5) * L, 0); g.add(sp);
+    });
+    g.position.copy(a.clone().add(b).multiplyScalar(0.5));
+    if (L > 0.01) g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+    form.add(g);
+  });
+  return form;
+}
+
+/** Non-indexed geometry for a stitch-graph mesh: each cell carries its own stitch coordinates. */
+function graphGeometry(mesh: any) {
+  const map: number[] = [], uv: number[] = [], cell: number[] = [];
+  mesh.cells.forEach((c: { v: number[]; pos: number[][]; tris: number[][] }) => {
+    const A = mesh.sts[c.v[0]]; const B = c.v[1] >= 0 ? mesh.sts[c.v[1]] : null;
+    const dir = B && B.row === A.row && B.x < A.x ? -1 : 1; const s0 = c.pos[0][0];
+    c.tris.forEach((t) => t.forEach((slot) => {
+      map.push(c.v[slot]); const [ps, pt] = c.pos[slot];
+      uv.push(A.x + (ps - s0) * dir, A.row - 1 + pt); cell.push(A.x, A.row);
+    }));
+  });
+  const g = new THREE.BufferGeometry(); const n = map.length;
+  const pa = new THREE.BufferAttribute(new Float32Array(n * 3), 3); pa.setUsage(THREE.DynamicDrawUsage);
+  const na = new THREE.BufferAttribute(new Float32Array(n * 3), 3); na.setUsage(THREE.DynamicDrawUsage);
+  g.setAttribute('position', pa); g.setAttribute('normal', na);
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setAttribute('aCell', new THREE.Float32BufferAttribute(cell, 2));
+  return { g, map: Int32Array.from(map) };
 }
 
 export interface SceneCallbacks {
@@ -43,6 +85,7 @@ export class KnitScene {
   private camera = new THREE.PerspectiveCamera(22, 1, 0.5, 2000);
   private raycaster = new THREE.Raycaster();
   private mat: THREE.Mesh; private mtex: THREE.CanvasTexture; private grabDot: THREE.Mesh;
+  private formMat!: THREE.Material;
   private fades: Record<'form' | 'table' | 'mat' | 'labels', Fade>;
   private group: THREE.Group | null = null;
   private parts: Part[] = [];
@@ -58,8 +101,10 @@ export class KnitScene {
   private camTween: { from: Cam; to: Cam; t0: number; dur: number } | null = null;
   private cam: Cam = { target: new THREE.Vector3(0, MAT_Y, 0), dist: 80, phi: 0.01, theta: 0, fov: 22 };
   private camSet = false; private sized = false;
+  private insets: Insets = { l: 0, r: 0, t: 0, b: 0 };
   private simRunning = false; private simT = 0; private relaxUntil = 0; private lastT = 0;
   private raf = 0;
+  private fuzzOn = false;
   private cleanup: (() => void)[] = [];
 
   constructor(private host: HTMLElement, private statusEl: HTMLElement, private cb: SceneCallbacks) {
@@ -67,25 +112,14 @@ export class KnitScene {
     R.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     host.prepend(R.domElement);
     const scene = this.scene;
-    scene.background = new THREE.Color('#efe6d8');
+    scene.background = new THREE.Color('#f6f4f1');
     scene.add(new THREE.HemisphereLight(0xfff6e8, 0x8a7a68, 0.9 * LEGACY_LIGHT));
     const d1 = new THREE.DirectionalLight(0xffffff, 0.8 * LEGACY_LIGHT); d1.position.set(20, 60, 35); scene.add(d1);
     const d2 = new THREE.DirectionalLight(0xffe2c4, 0.3 * LEGACY_LIGHT); d2.position.set(-30, 10, -20); scene.add(d2);
     // dress form
     const fm = new THREE.MeshStandardMaterial({ color: 0xd9d1c4, roughness: 0.8, transparent: true, opacity: 0.55, depthWrite: false });
-    const form = new THREE.Group();
-    BODY.capsules.filter((c: any) => !c.hidden).forEach((c: any) => {
-      const a = new THREE.Vector3(...(c.a as [number, number, number])), b = new THREE.Vector3(...(c.b as [number, number, number]));
-      const L = a.distanceTo(b); const g = new THREE.Group();
-      if (L > 0.01) g.add(new THREE.Mesh(new THREE.CylinderGeometry(c.rb, c.ra, L, 24, 1, true), fm));
-      [a, b].forEach((_p, i) => {
-        const sp = new THREE.Mesh(new THREE.SphereGeometry(i ? c.rb : c.ra, 24, 16), fm);
-        sp.position.set(0, (i ? 0.5 : -0.5) * L, 0); g.add(sp);
-      });
-      g.position.copy(a.clone().add(b).multiplyScalar(0.5));
-      g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
-      form.add(g);
-    });
+    this.formMat = fm;
+    const form = capsuleGroup(BODY.capsules, fm);
     const standMat = new THREE.MeshStandardMaterial({ color: 0x8b6b4a, transparent: true });
     const stand = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 14, 12), standMat); stand.position.set(0, -14, 0); form.add(stand);
     scene.add(form);
@@ -96,10 +130,10 @@ export class KnitScene {
     scene.add(table);
     // cutting mat with a 1-inch grid
     const mc = document.createElement('canvas'); mc.width = mc.height = 512; const mx = mc.getContext('2d')!;
-    mx.fillStyle = '#3f6b5c'; mx.fillRect(0, 0, 512, 512);
+    mx.fillStyle = '#ece7e0'; mx.fillRect(0, 0, 512, 512);
     for (let i = 0; i <= 12; i++) {
       const p = (i * 512) / 12;
-      mx.strokeStyle = i % 6 === 0 ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.22)'; mx.lineWidth = i % 6 === 0 ? 2.5 : 1.2;
+      mx.strokeStyle = i % 6 === 0 ? 'rgba(120,100,80,0.28)' : 'rgba(120,100,80,0.13)'; mx.lineWidth = i % 6 === 0 ? 2.5 : 1.2;
       mx.beginPath(); mx.moveTo(p, 0); mx.lineTo(p, 512); mx.moveTo(0, p); mx.lineTo(512, p); mx.stroke();
     }
     const mtex = (this.mtex = new THREE.CanvasTexture(mc));
@@ -138,6 +172,13 @@ export class KnitScene {
 
   setShowSeams(v: boolean) { this.showSeams = v; }
 
+  /** Screen space (px) covered by floating UI; the camera frames the knit in the rest. */
+  setInsets(i: Insets) {
+    const k = [i.l, i.r, i.t, i.b].join();
+    if (k === [this.insets.l, this.insets.r, this.insets.t, this.insets.b].join()) return;
+    this.insets = i; this.sized = false;
+  }
+
   fit(dur = 0.8) { this.tweenCam(this.camPreset(this.mode), dur); }
 
   focusPiece(name: string) {
@@ -165,6 +206,7 @@ export class KnitScene {
 
   // ---------- build ----------
   private disposeGroup() {
+    this.parts.forEach((p) => p.gi?.dispose());
     if (!this.group) return;
     this.scene.remove(this.group);
     this.group.traverse((o) => {
@@ -189,31 +231,33 @@ export class KnitScene {
     this.posAligned = new Float32Array(sim.pos);
     this.posFlat = this.layoutFlat(sim);
     this.parts.forEach((part, idx) => {
-      const g = new THREE.BufferGeometry();
+      let g = new THREE.BufferGeometry();
       const n = part.mesh.local.length;
       const attr = new THREE.BufferAttribute(sim.pos.subarray(part.offset * 3, (part.offset + n) * 3), 3); attr.setUsage(THREE.DynamicDrawUsage);
       g.setAttribute('position', attr); g.setAttribute('uv', new THREE.Float32BufferAttribute(part.mesh.uv, 2)); g.setIndex(part.mesh.tris);
-      part.canvas = { RS: document.createElement('canvas'), WS: document.createElement('canvas') };
-      part.tex = {} as Part['tex'];
-      (['RS', 'WS'] as Side[]).forEach((sd) => {
-        const t = new THREE.CanvasTexture(part.canvas[sd]); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; part.tex[sd] = t;
-      });
-      this.drawTexture(part, 'RS'); this.drawTexture(part, 'WS');
-      const mF = new THREE.MeshStandardMaterial({ map: part.tex.RS, bumpMap: part.tex.RS, bumpScale: 0.25, roughness: 0.95, alphaTest: 0.4, side: THREE.FrontSide });
-      const mB = new THREE.MeshStandardMaterial({ map: part.tex.WS, bumpMap: part.tex.WS, bumpScale: 0.25, roughness: 0.95, alphaTest: 0.4, side: THREE.BackSide, color: 0xe6dccd });
-      const a = new THREE.Mesh(g, mF), b = new THREE.Mesh(g, mB); a.userData.part = b.userData.part = part;
-      this.group!.add(a, b); Object.assign(part, { g, attr, meshes: [a, b], idx });
+      if (part.mesh.graph) { const gg = graphGeometry(part.mesh); part.gi = g; part.map = gg.map; g = gg.g; }
+      // the overlay (needles, the picked stitch) is drawn in 2D; the fabric itself is a shader
+      part.canvas = document.createElement('canvas');
+      part.tex = new THREE.CanvasTexture(part.canvas); part.tex.anisotropy = 8;
+      const fm = fabricMaterials(part.P, part.mesh, doc.built.sg, doc.built.rg, part.tex);
+      const a = new THREE.Mesh(g, fm.cloth); a.userData.part = part;
+      const shells = fm.shells.map((m) => { const sh = new THREE.Mesh(g, m); sh.raycast = () => {}; sh.renderOrder = 1; sh.visible = this.fuzzOn; return sh; });
+      this.group!.add(a, ...shells); Object.assign(part, { g, attr, meshes: [a], idx, fab: fm, shells });
+      this.drawTexture(part);
       // label on the mat
       const lc = document.createElement('canvas'); lc.width = 512; lc.height = 96; const lx = lc.getContext('2d')!;
-      lx.fillStyle = 'rgba(255,255,255,0.92)'; lx.font = '600 44px "IBM Plex Mono", monospace'; lx.fillText(part.P.name, 6, 46);
-      lx.font = '400 30px "IBM Plex Sans", sans-serif'; lx.fillStyle = 'rgba(255,255,255,0.7)';
-      lx.fillText(`${part.P.widthIn.toFixed(1)}″ × ${part.P.heightIn.toFixed(1)}″ · ${part.P.nrows - 1} rows`, 6, 86);
+      lx.fillStyle = 'rgba(35,32,29,0.88)'; lx.font = '800 44px Nunito, sans-serif'; lx.fillText(part.P.name.replace(/_/g, ' '), 6, 46);
+      lx.font = '600 30px Nunito, sans-serif'; lx.fillStyle = 'rgba(35,32,29,0.5)';
+      const fb0 = part.flatBox; const [wIn, hIn] = part.mesh.graph ? [fb0.x1 - fb0.x0, fb0.z1 - fb0.z0] : [part.P.widthIn, part.P.heightIn];
+      lx.fillText(`${wIn.toFixed(1)}″ × ${hIn.toFixed(1)}″ · ${part.P.nrows - 1} rows`, 6, 86);
       const lt = new THREE.CanvasTexture(lc); lt.colorSpace = THREE.SRGBColorSpace;
       const lm = new THREE.MeshBasicMaterial({ map: lt, transparent: true, depthWrite: false });
       const label = new THREE.Mesh(new THREE.PlaneGeometry(16, 3), lm); label.rotation.x = -Math.PI / 2;
       const fb = part.flatBox; label.position.set(fb.x0 + 8, MAT_Y + 0.01, fb.z1 + 2.6); this.group!.add(label);
       this.fades.labels.mats.push(lm); this.fades.labels.base.push(1);
     });
+    // foot forms for shoes
+    if (sim.feet && sim.feet.length) this.group.add(capsuleGroup(sim.feet, this.formMat));
     // seam threads
     const sp = new Float32Array(sim.seams.length * 3);
     const sg2 = new THREE.BufferGeometry(); const sattr = new THREE.BufferAttribute(sp, 3); sattr.setUsage(THREE.DynamicDrawUsage); sg2.setAttribute('position', sattr);
@@ -263,7 +307,19 @@ export class KnitScene {
   }
 
   private markDirty() {
-    this.parts.forEach((p) => { p.attr.needsUpdate = true; p.g.computeVertexNormals(); p.g.computeBoundingSphere(); });
+    this.parts.forEach((p) => {
+      p.attr.needsUpdate = true;
+      if (p.map && p.gi) {
+        // smooth normals from the indexed sim mesh, copied out to the per-cell render vertices
+        p.gi.computeVertexNormals();
+        const src = p.attr.array, nrm = p.gi.getAttribute('normal').array;
+        const pa = p.g.getAttribute('position') as THREE.BufferAttribute, na = p.g.getAttribute('normal') as THREE.BufferAttribute;
+        const P = pa.array as Float32Array, N = na.array as Float32Array, m = p.map;
+        for (let i = 0; i < m.length; i++) { const o = m[i] * 3, d = i * 3; P[d] = src[o]; P[d + 1] = src[o + 1]; P[d + 2] = src[o + 2]; N[d] = nrm[o]; N[d + 1] = nrm[o + 1]; N[d + 2] = nrm[o + 2]; }
+        pa.needsUpdate = na.needsUpdate = true;
+      } else p.g.computeVertexNormals();
+      p.g.computeBoundingSphere();
+    });
   }
 
   // ---------- textures ----------
@@ -274,48 +330,67 @@ export class KnitScene {
     return { pxS, pxR: (pxS * sg) / rg };
   }
 
-  private drawTexture(part: Part, side: Side) {
+  private drawTexture(part: Part) {
     const P = part.P, mesh = part.mesh; const { pxS, pxR } = this.texSize(P);
     const { curPiece, progress, selected } = this.knit;
+    const isCur = P.name === curPiece; const inProgress = isCur && progress < P.total;
+    const sel = selected && selected.piece === P.name ? selected : null;
+    setFabricState(part.fab, inProgress ? progress : null, sel ? sel.ord : null);
+    const on = (inProgress || !!sel) && !mesh.graph; // graph meshes have no flat texture to paint on
+    (part.fab.cloth.uniforms.uOvOn as THREE.IUniform).value = on ? 1 : 0;
+    if (!on) return;
     const W = Math.ceil(mesh.W * pxS), H = Math.ceil(mesh.H * pxR);
-    const cv = part.canvas[side]; if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+    const cv = part.canvas; if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; part.tex.dispose(); }
     const ctx = cv.getContext('2d')!; ctx.clearRect(0, 0, W, H);
     const ox = (P.minx - 0.5 - mesh.x0) * pxS, oy = H - P.nrows * pxR;
-    const isCur = P.name === curPiece; const inProgress = isCur && progress < P.total;
-    const src = part.scratch || (part.scratch = document.createElement('canvas')); src.width = W; src.height = H;
-    const sctx = src.getContext('2d')!; sctx.clearRect(0, 0, W, H);
-    const geo = drawPiece(sctx, P, ox, oy, pxS, pxR, { side, stretch: !!mesh.band, progress: inProgress ? progress : null });
-    if (!inProgress) { // bleed whole-stitch copies under cut mesh edges
-      const bx = mesh.band ? 0 : mesh.cs + 1, by = mesh.cr + 1;
-      for (let r = by; r >= 1; r--) { ctx.drawImage(src, 0, r * pxR); ctx.drawImage(src, 0, -r * pxR); }
-      ctx.globalCompositeOperation = 'destination-over';
-      for (let c = 1; c <= bx; c++) for (let r = -by; r <= by; r++) { ctx.drawImage(src, c * pxS, r * pxR); ctx.drawImage(src, -c * pxS, r * pxR); }
-      ctx.globalCompositeOperation = 'source-over';
-    }
-    ctx.drawImage(src, 0, 0);
-    if (side === 'RS' && (isCur || (selected && selected.piece === P.name))) {
-      // in a band texture each row is stretched to full width, so stitch width varies by row
-      const ext = mesh.band ? rowExtents(P).map((e) => e.w) : null;
-      const W0 = ext ? Math.max(...ext) : 0;
-      const swFor = (r: number) => (ext ? (pxS * W0) / ext[Math.max(0, Math.min(P.nrows - 1, r))] : pxS);
-      drawOverlay(ctx, P, isCur ? progress : Infinity, selected, geo.X, geo.Y, swFor, pxR);
-    }
-    part.tex[side].needsUpdate = true;
+    const geo = pieceXY(P, ox, oy, pxS, pxR, !!mesh.band);
+    // in a band texture each row is stretched to full width, so stitch width varies by row
+    const ext = mesh.band ? rowExtents(P).map((e) => e.w) : null;
+    const W0 = ext ? Math.max(...ext) : 0;
+    const swFor = (r: number) => (ext ? (pxS * W0) / ext[Math.max(0, Math.min(P.nrows - 1, r))] : pxS);
+    drawOverlay(ctx, P, isCur ? progress : Infinity, selected, geo.X, geo.Y, swFor, pxR);
+    part.tex.needsUpdate = true;
   }
 
   private refreshTexture(name: string) {
     const part = this.parts.find((p) => p.P.name === name);
-    if (part) { this.drawTexture(part, 'RS'); this.drawTexture(part, 'WS'); }
+    if (part) this.drawTexture(part);
   }
 
   // ---------- camera ----------
-  private aspect() { const h = this.host; return h.clientWidth && h.clientHeight ? h.clientWidth / h.clientHeight : 1.3; }
-  private fitDist(w: number, h: number, fov: number) { const t = 2 * Math.tan((fov * Math.PI) / 360); return (Math.max(h, w / this.aspect()) * 1.12) / t; }
+  /** Size of the free area not covered by floating UI. */
+  private free() {
+    const h = this.host, i = this.insets;
+    const W = h.clientWidth, H = h.clientHeight;
+    if (!W || !H) return { w: 1.3, h: 1, W: 1.3, H: 1 };
+    const fw = W - i.l - i.r, fh = H - i.t - i.b;
+    return fw > W * 0.35 && fh > H * 0.35 ? { w: fw, h: fh, W, H } : { w: W, h: H, W, H };
+  }
+  private aspect() { const f = this.free(); return f.w / f.h; }
+  private fitDist(w: number, h: number, fov: number) {
+    const t = 2 * Math.tan((fov * Math.PI) / 360); const f = this.free();
+    // the vertical fov spans the whole (virtual) frame, of which the free area is f.h
+    const vH = f.H + Math.abs(this.offY());
+    return (Math.max(h, w / this.aspect()) * 1.12 * (vH / f.h)) / t;
+  }
+  private offX() { const f = this.free(); return f.w === f.W ? 0 : this.insets.l - this.insets.r; }
+  private offY() { const f = this.free(); return f.h === f.H ? 0 : this.insets.t - this.insets.b; }
+  /** Shift the projection so its centre sits in the middle of the free area. */
+  private applyViewOffset(w: number, h: number) {
+    const dx = this.offX(), dy = this.offY();
+    const FW = w + Math.abs(dx), FH = h + Math.abs(dy);
+    this.camera.aspect = FW / FH;
+    if (dx || dy) this.camera.setViewOffset(FW, FH, dx < 0 ? -dx : 0, dy < 0 ? -dy : 0, w, h);
+    else this.camera.clearViewOffset();
+    this.camera.updateProjectionMatrix();
+  }
   private camPreset(mode: ViewMode, focusBox?: Box): Cam {
     if (mode === 'pieces') {
       const b = focusBox || this.flatBounds || { x0: -20, x1: 20, z0: -20, z1: 20 };
       return { target: new THREE.Vector3((b.x0 + b.x1) / 2, MAT_Y, (b.z0 + b.z1) / 2), dist: this.fitDist(b.x1 - b.x0, b.z1 - b.z0, 22), phi: 0.012, theta: 0, fov: 22 };
     }
+    // shoes: look down at the foot forms from in front and to the side
+    if (this.sim && this.sim.feet && this.sim.feet.length) return { target: new THREE.Vector3(TABLE.c[0], TABLE.top + 2, TABLE.c[2]), dist: 34 / Math.min(1, this.aspect() * 0.9), phi: 0.95, theta: 0.7, fov: 38 };
     if (this.sim && this.sim.useTable) return { target: new THREE.Vector3(TABLE.c[0], TABLE.top - 4, TABLE.c[2] - 6), dist: 80 / Math.min(1, this.aspect() * 0.9), phi: 1.05, theta: 0.45, fov: 38 };
     const P = this.posAligned; let mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9];
     if (P) for (let i = 0; i < P.length; i += 3) for (let q = 0; q < 3; q++) { mn[q] = Math.min(mn[q], P[i + q]); mx[q] = Math.max(mx[q], P[i + q]); }
@@ -352,14 +427,14 @@ export class KnitScene {
   }
   private updateStatus() {
     const s = this.sim; const el = this.statusEl; if (!s) return;
-    if (this.mode === 'pieces') { el.textContent = `${s.parts.length} piece${s.parts.length > 1 ? 's' : ''} on a 1″ grid. Drag to pan, pinch or scroll to zoom, twist with two fingers. Tap a stitch to inspect it.`; return; }
-    if (this.mode === 'aligned') { el.textContent = `Pieces lined up where they'll be sewn — red threads show which edges join. Drag to orbit.`; return; }
+    if (this.mode === 'pieces') { el.textContent = `${s.parts.length} piece${s.parts.length > 1 ? 's' : ''} on a 1″ grid · drag to pan, scroll to zoom, tap a stitch`; return; }
+    if (this.mode === 'aligned') { el.textContent = `Pieces lined up where they'll be sewn · drag to orbit, two fingers to pan`; return; }
     const T = this.simT; let txt: string;
-    if (!this.simRunning && this.posAssembled) txt = 'Assembled. Drag the fabric to pull it; drag elsewhere to orbit. Tap a stitch to inspect it.';
+    if (!this.simRunning && this.posAssembled) txt = 'Drag the fabric to tug it · drag around it to orbit';
     else {
       const active = (this.doc!.seams || []).filter((x) => !x.hidden && s.stageOf(x.stage, T) > 0 && s.stageOf(x.stage, T) < 1).sort((a, b) => a.stage - b.stage);
       const last = active[active.length - 1];
-      txt = last ? `Sewing: ${last.a} = ${last.b}` : T < s.tGrav + 1.5 ? 'Seams closed — letting it hang…' : 'Settling…';
+      txt = last ? `Sewing the ${last.a.split('.')[0].replace(/_/g, ' ')} in place…` : T < s.tGrav + 1.5 ? 'Seams closed — letting it hang…' : 'Settling…';
     }
     if (el.textContent !== txt) el.textContent = txt;
   }
@@ -367,8 +442,8 @@ export class KnitScene {
   private frame() {
     const host = this.host; const w = host.clientWidth, h = host.clientHeight; if (!w || !h) return;
     const R = this.R;
-    if (R.domElement.width !== Math.floor(w * R.getPixelRatio()) || R.domElement.height !== Math.floor(h * R.getPixelRatio())) {
-      R.setSize(w, h); this.camera.aspect = w / h; this.camera.updateProjectionMatrix();
+    if (!this.sized || R.domElement.width !== Math.floor(w * R.getPixelRatio()) || R.domElement.height !== Math.floor(h * R.getPixelRatio())) {
+      R.setSize(w, h); this.applyViewOffset(w, h);
       if (!this.sized) { this.sized = true; Object.assign(this.cam, this.camPreset(this.mode)); }
     }
     const now = performance.now(); const dt = Math.min(0.1, (now - (this.lastT || now)) / 1000); this.lastT = now;
@@ -421,7 +496,17 @@ export class KnitScene {
       this.seamMat.opacity = this.mode === 'pieces' ? 0.3 : 0.85;
     }
     if (this.dirtyTex.size && this.parts.length) { this.dirtyTex.forEach((n) => this.refreshTexture(n)); this.dirtyTex.clear(); }
+    this.updateFuzz(h);
     R.render(this.scene, this.camera);
+  }
+
+  /** Stray fibres only show when stitches are big enough on screen to see them. */
+  private updateFuzz(hPx: number) {
+    if (!this.doc) return;
+    const pxPerIn = hPx / (2 * this.cam.dist * Math.tan((this.cam.fov * Math.PI) / 360));
+    const on = pxPerIn / this.doc.built.sg > 5;
+    if (on === this.fuzzOn) return;
+    this.fuzzOn = on; this.parts.forEach((p) => p.shells.forEach((m) => { m.visible = on; }));
   }
 
   private updateGrabDot() {
@@ -437,10 +522,28 @@ export class KnitScene {
     let last2: { d: number; ang: number; mid: [number, number] } | null = null, moved = 0, downAt: [number, number] | null = null;
     let hoverT = 0;
     const worldPerPx = () => (2 * this.cam.dist * Math.tan((this.cam.fov * Math.PI) / 360)) / el.clientHeight;
+    const camR = new THREE.Vector3(), camU = new THREE.Vector3();
     const pan = (dx: number, dy: number) => {
-      const k = worldPerPx(), th = this.cam.theta;
-      this.cam.target.x -= (Math.cos(th) * dx + Math.sin(th) * dy) * k;
-      this.cam.target.z -= (-Math.sin(th) * dx + Math.cos(th) * dy) * k;
+      const k = worldPerPx();
+      if (this.mode === 'pieces') {
+        // on the mat: slide across the table
+        const th = this.cam.theta;
+        this.cam.target.x -= (Math.cos(th) * dx + Math.sin(th) * dy) * k;
+        this.cam.target.z -= (-Math.sin(th) * dx + Math.cos(th) * dy) * k;
+      } else {
+        // around the form: slide in the screen plane
+        camR.setFromMatrixColumn(this.camera.matrixWorld, 0); camU.setFromMatrixColumn(this.camera.matrixWorld, 1);
+        this.cam.target.addScaledVector(camR, -dx * k).addScaledVector(camU, dy * k);
+      }
+    };
+    // trackpads send a stream of small wheel events for a two-finger drag (and ctrl+wheel for a pinch);
+    // mouse wheels send big notches. Once a stream looks like a trackpad, keep treating it as one.
+    let padUntil = 0;
+    const isPad = (e: WheelEvent) => {
+      const now = performance.now();
+      if (e.deltaMode === 0 && (e.deltaX !== 0 || !Number.isInteger(e.deltaY) || Math.abs(e.deltaY) < 16)) padUntil = now + 400;
+      else if (e.deltaMode !== 0 || Math.abs(e.deltaY) >= 50) padUntil = 0;
+      return now < padUntil;
     };
     const zoom = (f: number) => { const lim = this.mode === 'pieces' ? [6, 900] : [15, 260]; this.cam.dist = Math.min(lim[1], Math.max(lim[0], this.cam.dist * f)); };
     const ray = (cx: number, cy: number) => {
@@ -458,7 +561,8 @@ export class KnitScene {
         if (h && h.face) {
           const part = h.object.userData.part as Part; const f = h.face; const P = this.sim.pos;
           let best = f.a, bd = Infinity;
-          [f.a, f.b, f.c].forEach((v) => {
+          const mp = part.map;
+          [f.a, f.b, f.c].map((v) => (mp ? mp[v] : v)).forEach((v) => {
             const gi = (part.offset + v) * 3;
             const d = (P[gi] - h.point.x) ** 2 + (P[gi + 1] - h.point.y) ** 2 + (P[gi + 2] - h.point.z) ** 2;
             if (d < bd) { bd = d; best = v; }
@@ -496,10 +600,9 @@ export class KnitScene {
         const mid: [number, number] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
         if (last2) {
           zoom(last2.d / d);
-          if (this.mode === 'pieces') {
-            let da = ang - last2.ang; da = Math.atan2(Math.sin(da), Math.cos(da)); this.cam.theta -= da;
-            pan(mid[0] - last2.mid[0], mid[1] - last2.mid[1]);
-          }
+          if (this.mode === 'pieces') { let da = ang - last2.ang; da = Math.atan2(Math.sin(da), Math.cos(da)); this.cam.theta -= da; }
+          // two fingers dragging together pan, in every view
+          pan(mid[0] - last2.mid[0], mid[1] - last2.mid[1]);
         }
         last2 = { d, ang, mid };
       }
@@ -512,10 +615,10 @@ export class KnitScene {
     const cancel = (e: PointerEvent) => { pts.delete(e.pointerId); last2 = null; };
     const wheel = (e: WheelEvent) => {
       e.preventDefault(); this.camTween = null;
-      const pieces = this.mode === 'pieces';
-      if (e.ctrlKey || !pieces || (Math.abs(e.deltaY) > Math.abs(e.deltaX) * 2 && !e.shiftKey && e.deltaMode !== 0)) zoom(1 + e.deltaY * (e.ctrlKey ? 0.01 : 0.0012));
-      else if (Math.abs(e.deltaX) > 0.5 || e.shiftKey) pan(-e.deltaX, -e.deltaY);
-      else zoom(1 + e.deltaY * 0.0012);
+      const pad = isPad(e);
+      if (e.ctrlKey) zoom(1 + e.deltaY * 0.01); // pinch on a trackpad
+      else if (pad || e.shiftKey) pan(-e.deltaX, -e.deltaY); // two-finger drag on a trackpad
+      else zoom(1 + e.deltaY * 0.0012); // mouse wheel
     };
     el.addEventListener('pointerdown', down); el.addEventListener('pointermove', move);
     el.addEventListener('pointerup', up); el.addEventListener('pointercancel', cancel);
@@ -528,9 +631,24 @@ export class KnitScene {
 
   private pick(hits: THREE.Intersection[]) {
     for (const h of hits) {
-      const st = this.uvToStitch(h.object.userData.part as Part, h.uv);
+      const part = h.object.userData.part as Part;
+      const st = part.map ? this.faceToStitch(part, h) : this.uvToStitch(part, h.uv);
       if (st) { this.cb.onPick(st); return; }
     }
+  }
+
+  private faceToStitch(part: Part, h: THREE.Intersection): Stitch | null {
+    if (!h.face || !part.map) return null;
+    const P = this.sim.pos; let best = -1, bd = Infinity;
+    [h.face.a, h.face.b, h.face.c].forEach((r) => {
+      const v = part.map![r], gi = (part.offset + v) * 3;
+      const d = (P[gi] - h.point.x) ** 2 + (P[gi + 1] - h.point.y) ** 2 + (P[gi + 2] - h.point.z) ** 2;
+      if (d < bd) { bd = d; best = v; }
+    });
+    const st = part.mesh.sts[best] as Stitch | undefined; if (!st) return null;
+    const { curPiece, progress } = this.knit;
+    if (st.piece === curPiece && progress < part.P.total && st.ord >= progress) return null;
+    return st;
   }
 
   private uvToStitch(part: Part, uv?: THREE.Vector2): Stitch | null {

@@ -743,7 +743,7 @@ function startStmt(ctx, head, t, line) {
     for (const r of ordered) { const part = freshSts(P, r.n, 'co', line, { sec: r.name || '' }); if (r.name) P.named[r.name] = { sts: part, kind: 'co' }; sts.push(...part); }
     if (runs.length > 1 && runs.every((r) => !r.name)) fail('several cast-on runs need names: cast_on a:10 b:10');
     startNeedle(P, sts, line, `Cast on ${total} sts${method ? ` (${method.replace(/_/g, ' ')})` : ''}`, ws);
-    P.coMethod = method;
+    P.coMethod = method; P.coLine = line;
     if (method === 'provisional') addHolder(P, 'provisional', [], 0);
     return;
   }

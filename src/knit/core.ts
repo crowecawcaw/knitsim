@@ -5,6 +5,7 @@
 import { buildDoc } from './engine/build';
 import { assemble } from './engine/assemble';
 import { edgeOf as engineEdgeOf } from './engine/edges';
+import { needsGraph, buildGraphMesh, stadium } from './stitchGraph';
 
 // ---------- Tokenizing into statements ----------
 function splitStatements(src) {
@@ -654,6 +655,20 @@ const ARM_ANGLE = 50 * Math.PI / 180;
   });
 })();
 const TABLE = { c: [0, 2, 24], r: 13, top: 2, depth: 1.5 };
+// foot forms standing on the table, toes toward the viewer; side +1 is the wearer's left (+x)
+const FOOT = { x: 3.4, heel: TABLE.c[2] - 5.4, toe: TABLE.c[2] + 5.4, y0: TABLE.top + 0.9 };
+// k scales the form about its toe, to fit what is knitted (a sock is smaller than a felted shoe)
+function footCaps(side, k = 1) {
+  const cx = side * FOOT.x, { heel, toe, y0 } = FOOT;
+  const sc = c => ({ a: scP(c.a), b: scP(c.b), ra: c.ra * k, rb: c.rb * k });
+  const scP = q => [cx + (q[0] - cx) * k, TABLE.top + (q[1] - TABLE.top) * k, toe + (q[2] - toe) * k];
+  return [
+    { a: [cx - 0.5, y0 + 1.0, heel + 1.0], b: [cx - 0.45, y0 + 0.8, toe - 0.8], ra: 1.0, rb: 0.8 },
+    { a: [cx + 0.5, y0 + 1.0, heel + 1.0], b: [cx + 0.6, y0 + 0.8, toe - 1.1], ra: 1.0, rb: 0.75 },
+    { a: [cx, y0 + 1.0, toe - 3.2], b: [cx, y0 + 1.8, heel + 2.4], ra: 0.95, rb: 1.2 },
+    { a: [cx, y0 + 1.8, heel + 1.9], b: [cx, y0 + 10, heel + 1.9], ra: 1.35, rb: 1.5 },
+  ].map(sc);
+}
 
 const stretchOf = fab => !fab ? 1.15 : /rib/.test(fab) ? 1.55 : /garter|moss|seed/.test(fab) ? 1.2 : 1.15;
 function rowExtent(P) {
@@ -683,6 +698,7 @@ function buildRoundMesh(built, P) {
 }
 
 function buildMesh(built, P) {
+  if (needsGraph(P)) return buildGraphMesh(P, built.sg, built.rg, stretchOf);
   // any piece whose rows are single contiguous runs (no neckline split) gets a smooth per-row band mesh
   if (P.round || !P.split) return buildRoundMesh(built, P);
   const { sg, rg } = built;
@@ -773,12 +789,114 @@ function placePiece(P, mesh, at, built, neckRef) {
       const sc = scarfFrame((y - Hin / 2));
       const u = x - cx;
       w = [0, 1, 2].map(q => sc.p[q] + sc.w[q] * u);
+    } else if ((at === 'left_foot' || at === 'right_foot') && mesh.graph && isTube(mesh)) {
+      w = tubePoint(mesh, k, at === 'left_foot' ? 1 : -1);
+    } else if ((at === 'left_foot' || at === 'right_foot') && mesh.graph) {
+      // drape over the foot as the bowl the rounds make (what was worked after them is filled in below)
+      const side = at === 'left_foot' ? 1 : -1, l = mesh.local[k];
+      const bowl = mesh.bowl || (mesh.bowl = bowlOf(mesh));
+      const i = Math.min(bowl.length - 1, Math.max(0, Math.round(l.d / BOWL_STEP))), b = bowl[i];
+      const q = stadium(mesh.flatL, mesh.w0, l.t, b.r);
+      w = [side * FOOT.x + q.y, TABLE.top + 0.5 + b.h, TABLE.c[2] + q.x];
     } else { // table: lifted flat above the table top
       w = [x - cx, TABLE.top + 6, TABLE.c[2] + (y - Hin / 2)];
     }
     pos[k * 3] = w[0]; pos[k * 3 + 1] = w[1]; pos[k * 3 + 2] = w[2];
   }
+  if (mesh.graph && (at === 'left_foot' || at === 'right_foot')) {
+    const side = at === 'left_foot' ? 1 : -1;
+    if (isTube(mesh)) fillOver(mesh, pos, footCaps(side, mesh.footK), tubeAnchor(mesh), false);
+    else fillOver(mesh, pos, footCaps(side));
+  }
   return pos;
+}
+// A closed cast-on worked in rounds is a bowl: each round's length (its stitch count) sets how far out
+// from the cast-on line it can reach; whatever depth that can't use goes into rising.
+const BOWL_STEP = 0.05;
+function bowlOf(mesh) {
+  const R = mesh.rings, L = mesh.flatL, out = [{ r: 0, h: 0 }];
+  const perim = d => { if (d <= R[0].d) return R[0].p; for (let i = 1; i < R.length; i++) if (d <= R[i].d) { const f = (d - R[i - 1].d) / ((R[i].d - R[i - 1].d) || 1); return R[i - 1].p + (R[i].p - R[i - 1].p) * f; } return R[R.length - 1].p; };
+  const reach = d => Math.max(0, (perim(d) - 2 * L) / (2 * Math.PI) - mesh.w0);
+  const maxD = Math.max(...mesh.local.map(l => l.d));
+  for (let d = BOWL_STEP; d <= maxD + BOWL_STEP; d += BOWL_STEP) {
+    const prev = out[out.length - 1]; const dr = Math.max(0, Math.min(BOWL_STEP, reach(d) - prev.r));
+    out.push({ r: prev.r + dr, h: prev.h + Math.sqrt(BOWL_STEP * BOWL_STEP - dr * dr) });
+  }
+  return out;
+}
+// A sock: started from a short cast-on line at the toe, so the rounds run along the foot as a tube,
+// and a short-row heel turns them up the leg. (A shoe's cast-on runs the length of the sole instead.)
+const isTube = mesh => {
+  if (mesh.tubeMode == null) { const pMax = Math.max(...mesh.tube.p); mesh.tubeMode = 2 * mesh.flatL < 0.4 * pMax; }
+  return mesh.tubeMode;
+};
+const tubeAnchor = mesh => mesh.tubeA || (mesh.tubeA = Uint8Array.from(mesh.tube.s, s => (isNaN(s) ? 0 : 1)));
+function tubeFrame(mesh) {
+  if (mesh.tf) return mesh.tf;
+  const { tube, flatL: L, w0 } = mesh;
+  const reach = p => Math.max(0, (p - 2 * L) / (2 * Math.PI) - w0);
+  const R = reach(Math.max(...tube.p)) + w0;          // the foot's half-height
+  // size the form so its ankle sits where the leg rises
+  const k = Math.min(1.3, Math.max(0.5, (tube.bendS + R) / 8.9));
+  mesh.footK = k;
+  const yc = TABLE.top + 0.9 * k - 0.15 + R, zt = FOOT.toe;
+  return (mesh.tf = { reach, R, k, yc, zt, zB: zt - tube.bendS });
+}
+function tubePoint(mesh, v, side) {
+  const { tube, theta, flatL, w0 } = mesh; const f = tubeFrame(mesh); const cx = side * FOOT.x;
+  const s = tube.s[v];
+  if (isNaN(s)) return [cx, f.yc - f.R * 0.5, f.zB - f.R * 0.6];   // the heel: filled in afterwards
+  const q = stadium(flatL, w0, (theta[v] - tube.soleT + 0.75 + 2) % 1, f.reach(tube.p[v]));
+  if (!tube.leg[v]) return [cx + q.x, f.yc + q.y, f.zt - s];
+  return [cx + q.x, f.yc + f.R + s, f.zB - f.R + q.y];
+}
+// stitches worked after the last full round (a toe flap) span the gap their joins leave, like a film
+// over the opening, lifted clear of the foot
+function fillOver(mesh, pos, caps, anchor = mesh.anchor, lift = true) {
+  const { nbrs } = mesh; const n = anchor.length;
+  for (let it = 0; it < 300; it++) for (let v = 0; v < n; v++) {
+    if (anchor[v] || !nbrs[v].length) continue;
+    let x = 0, y = 0, z = 0; for (const u of nbrs[v]) { x += pos[u * 3]; y += pos[u * 3 + 1]; z += pos[u * 3 + 2]; }
+    const m = nbrs[v].length; pos[v * 3] = x / m; pos[v * 3 + 1] = y / m; pos[v * 3 + 2] = z / m;
+  }
+  if (lift) liftOver(mesh, pos, caps);
+  // then let the springs give those stitches their own size, with the foot pushing them clear
+  const cons = mesh.cons.filter(c => !anchor[c[0]] || !anchor[c[1]]);
+  const th = 0.5;
+  for (let it = 0; it < 240; it++) {
+    for (const [a, b, r, k] of cons) {
+      const dx = pos[b * 3] - pos[a * 3], dy = pos[b * 3 + 1] - pos[a * 3 + 1], dz = pos[b * 3 + 2] - pos[a * 3 + 2];
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6, f = k * (d - r) / d;
+      const wa = anchor[a] ? 0 : 1, wb = anchor[b] ? 0 : 1, w = wa + wb; if (!w) continue;
+      pos[a * 3] += dx * f * wa / w; pos[a * 3 + 1] += dy * f * wa / w; pos[a * 3 + 2] += dz * f * wa / w;
+      pos[b * 3] -= dx * f * wb / w; pos[b * 3 + 1] -= dy * f * wb / w; pos[b * 3 + 2] -= dz * f * wb / w;
+    }
+    for (let v = 0; v < n; v++) {
+      if (anchor[v]) continue;
+      for (const c of caps) {
+        const bx = c.b[0] - c.a[0], by = c.b[1] - c.a[1], bz = c.b[2] - c.a[2], L2 = bx * bx + by * by + bz * bz;
+        const px = pos[v * 3] - c.a[0], py = pos[v * 3 + 1] - c.a[1], pz = pos[v * 3 + 2] - c.a[2];
+        const t = Math.max(0, Math.min(1, (px * bx + py * by + pz * bz) / L2));
+        const ex = px - bx * t, ey = py - by * t, ez = pz - bz * t, d = Math.hypot(ex, ey, ez), R = c.ra + (c.rb - c.ra) * t + th;
+        if (d < R) { const f = d > 1e-6 ? R / d : 1; pos[v * 3] = c.a[0] + bx * t + (d > 1e-6 ? ex * f : 0); pos[v * 3 + 1] = c.a[1] + by * t + (d > 1e-6 ? ey * f : R); pos[v * 3 + 2] = c.a[2] + bz * t + (d > 1e-6 ? ez * f : 0); }
+      }
+      pos[v * 3 + 1] = Math.max(pos[v * 3 + 1], TABLE.top + th);
+    }
+  }
+}
+function liftOver(mesh, pos, caps) {
+  const { anchor } = mesh; const n = anchor.length;
+  for (let v = 0; v < n; v++) {
+    if (anchor[v]) continue;
+    const px = pos[v * 3], pz = pos[v * 3 + 2]; let top = -Infinity;
+    for (const c of caps) {
+      const bx = c.b[0] - c.a[0], bz = c.b[2] - c.a[2], L2 = bx * bx + bz * bz;
+      const t = L2 ? Math.max(0, Math.min(1, ((px - c.a[0]) * bx + (pz - c.a[2]) * bz) / L2)) : 0;
+      const dh = Math.hypot(px - c.a[0] - bx * t, pz - c.a[2] - bz * t), r = c.ra + (c.rb - c.ra) * t;
+      if (dh < r) top = Math.max(top, c.a[1] + (c.b[1] - c.a[1]) * t + Math.sqrt(r * r - dh * dh));
+    }
+    if (top > -Infinity) pos[v * 3 + 1] = Math.max(pos[v * 3 + 1], top + 0.5);
+  }
 }
 
 // centreline of a scarf around the neck: s = 0 behind the neck, |s| grows toward the two front ends
@@ -798,8 +916,8 @@ function scarfFrame(s) {
 }
 
 function nearestVert(mesh, p) {
-  let best = -1, bd = Infinity;
-  for (let k = 0; k < mesh.local.length; k++) { const d = (mesh.local[k].x - p.x) ** 2 + (mesh.local[k].y - p.y) ** 2; if (d < bd) { bd = d; best = k; } }
+  let best = -1, bd = Infinity; const L = mesh.seamLocal || mesh.local;
+  for (let k = 0; k < L.length; k++) { const d = (L[k].x - p.x) ** 2 + (L[k].y - p.y) ** 2; if (d < bd) { bd = d; best = k; } }
   return best;
 }
 function samplePath(segs, t) {
@@ -820,15 +938,16 @@ function samplePath(segs, t) {
 }
 
 // v2 spots, roughly: tubes around the torso, fronts on the front, hands on the arms, the rest on the table
-const SPOT_MAP = { front_left: 'front', front_right: 'front', shoulders: 'front', left_hand: 'left_arm', right_hand: 'right_arm', left_foot: 'table', right_foot: 'table', waist: 'torso', left_leg: 'table', right_leg: 'table', crotch: 'table' };
+const SPOT_MAP = { front_left: 'front', front_right: 'front', shoulders: 'front', left_hand: 'left_arm', right_hand: 'right_arm',  waist: 'torso', left_leg: 'table', right_leg: 'table', crotch: 'table' };
 
 // ---------- Cloth simulation ----------
 function makeSim(doc) {
   const built = doc.built; const parts = [];
   let N = 0;
   built.order.forEach(P => {
-    const at = SPOT_MAP[doc.placed[P.name]] || doc.placed[P.name]; if (!at || !P.nrows) return;
+    let at = SPOT_MAP[doc.placed[P.name]] || doc.placed[P.name]; if (!at || !P.nrows) return;
     const mesh = buildMesh(pv(built, P), P);
+    if ((at === 'left_foot' || at === 'right_foot') && !mesh.graph) at = 'table';
     const pos0 = placePiece(P, mesh, at, pv(built, P));
     parts.push({ P, mesh, offset: N, pos0, at }); N += mesh.local.length;
   });
@@ -844,6 +963,7 @@ function makeSim(doc) {
     if (!s.A || !s.B) return;
     const pa = s.A.map(x => partOf[x.piece]), pb = s.B.map(x => partOf[x.piece]);
     if (pa.some(x => !x) || pb.some(x => !x)) return;
+    if (s.kind === 'round' && pa.every(x => x.mesh.graph)) return; // the stitch graph is already a closed tube
     const L = Math.max(edgeLen(s.A), edgeLen(s.B)); const n = Math.max(4, Math.ceil(L / 0.7));
     for (let i = 0; i <= n; i++) {
       const sa = samplePath(s.A, i / n), sb = samplePath(s.B, i / n);
@@ -864,14 +984,87 @@ function makeSim(doc) {
     gathers.push(Int32Array.from(vs));
   });
   const S = new Int32Array(seamPairs); const ST = new Float32Array(pairStage);
-  const useTable = parts.some(p => p.at === 'table');
+  // ---- self-collision: cloth may not pass through cloth ----
+  // particles closer than SELF_R repel, unless they are neighbours in the knitted fabric
+  // (same piece, close in rest layout) or both sit by a seam / gather that pulls them together.
+  const SELF_R = 0.6, EXCL2 = (SELF_R * 2.1) ** 2;
+  const partIdx = new Int32Array(N), restX = new Float32Array(N), restY = new Float32Array(N);
+  // round pieces: x is measured around the tube (u × circumference) so distances wrap past the start
+  const circOf = parts.map(p => p.mesh.round ? p.mesh.W / pv(built, p.P).sg : 0);
+  parts.forEach((p, pi) => p.mesh.local.forEach((l, k) => { partIdx[p.offset + k] = pi; restX[p.offset + k] = circOf[pi] ? p.mesh.us[k] * circOf[pi] : l.x; restY[p.offset + k] = l.y; }));
+  // stitch-graph pieces know which stitches are near each other along the fabric
+  const nearOf = parts.map(p => p.mesh.near || null);
+  const fabricNear = (i, j) => { const pi = partIdx[i]; if (pi !== partIdx[j]) return false; const nr = nearOf[pi];
+    return nr ? nr[i - parts[pi].offset].has(j - parts[pi].offset) : restD2(i, j) < EXCL2; };
+  const restD2 = (i, j) => {
+    let dx = Math.abs(restX[i] - restX[j]); const c = circOf[partIdx[i]];
+    if (c) dx = Math.min(dx, c - dx);
+    return dx * dx + (restY[i] - restY[j]) ** 2;
+  };
+  // a seam or gather pulls distant fabric together; points near the same stretch of the same seam may touch
+  const zoneKeys = new Array(N).fill(null);
+  { const seeds = [];
+    for (let k = 0; k < seamPairs.length; k += 2) { seeds.push([seamPairs[k], k >> 1]); seeds.push([seamPairs[k + 1], k >> 1]); }
+    gathers.forEach((g, gi) => g.forEach(v => seeds.push([v, 1e6 * (gi + 1)])));
+    const byPart = new Map(); seeds.forEach(sd => { const pi = partIdx[sd[0]]; if (!byPart.has(pi)) byPart.set(pi, []); byPart.get(pi).push(sd); });
+    byPart.forEach((list, pi) => { const p = parts[pi], n = p.mesh.local.length;
+      for (let k = 0; k < n; k++) { const v = p.offset + k;
+        for (const [sv, key] of list) if (restD2(v, sv) < 2.6) (zoneKeys[v] ||= []).push(key); } }); }
+  const sameSeamStretch = (i, j) => {
+    const a = zoneKeys[i], b = zoneKeys[j]; if (!a || !b) return false;
+    // seam edges of two different pieces are meant to touch (several seams meet at an underarm)
+    if (partIdx[i] !== partIdx[j]) return true;
+    for (const x of a) for (const y of b) if (Math.abs(x - y) <= 2) return true;
+    return false;
+  };
+  const HS = 4093, hHead = new Int32Array(HS), hNext = new Int32Array(N);
+  const cellKey = (x, y, z) => ((((x * 73856093) ^ (y * 19349663) ^ (z * 83492791)) % HS) + HS) % HS;
+  // stitch-graph pieces have a particle per stitch, far denser than needed to stop cloth passing cloth
+  const selfOn = new Uint8Array(N).fill(1);
+  parts.forEach(p => { if (p.mesh.graph) for (let k = 0; k < p.mesh.local.length; k++) selfOn[p.offset + k] = k % 3 === 0 ? 1 : 0; });
+  function selfCollide() {
+    hHead.fill(-1);
+    const inv = 1 / SELF_R;
+    for (let i = 0; i < N; i++) {
+      if (!selfOn[i]) { hNext[i] = -1; continue; }
+      const k = cellKey(Math.floor(pos[i * 3] * inv), Math.floor(pos[i * 3 + 1] * inv), Math.floor(pos[i * 3 + 2] * inv));
+      hNext[i] = hHead[k]; hHead[k] = i;
+    }
+    const R2 = SELF_R * SELF_R;
+    for (let i = 0; i < N; i++) {
+      if (!selfOn[i]) continue;
+      const ix = i * 3;
+      const cx = Math.floor(pos[ix] * inv), cy = Math.floor(pos[ix + 1] * inv), cz = Math.floor(pos[ix + 2] * inv);
+      for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) for (let oz = -1; oz <= 1; oz++) {
+        for (let j = hHead[cellKey(cx + ox, cy + oy, cz + oz)]; j >= 0; j = hNext[j]) {
+          if (j <= i) continue;
+          const jx = j * 3;
+          const dx = pos[jx] - pos[ix], dy = pos[jx + 1] - pos[ix + 1], dz = pos[jx + 2] - pos[ix + 2];
+          const d2 = dx * dx + dy * dy + dz * dz; if (d2 >= R2 || d2 < 1e-12) continue;
+          if (fabricNear(i, j)) continue;
+          if (sameSeamStretch(i, j)) continue;
+          const d = Math.sqrt(d2), f = 0.5 * (SELF_R - d) / d;
+          const mx = dx * f, my = dy * f, mz = dz * f;
+          pos[ix] -= mx; pos[ix + 1] -= my; pos[ix + 2] -= mz; pos[jx] += mx; pos[jx + 1] += my; pos[jx + 2] += mz;
+          // friction: the layers drag on each other instead of sliding freely
+          prev[ix] -= mx * 0.6; prev[ix + 1] -= my * 0.6; prev[ix + 2] -= mz * 0.6;
+          prev[jx] += mx * 0.6; prev[jx + 1] += my * 0.6; prev[jx + 2] += mz * 0.6;
+        }
+      }
+    }
+  }
+  const feet = [...new Set(parts.filter(p => p.at === 'left_foot' || p.at === 'right_foot').map(p => p.at))]
+    .flatMap(at => footCaps(at === 'left_foot' ? 1 : -1, parts.find(p => p.at === at).mesh.footK || 1));
+  const useTable = parts.some(p => p.at === 'table') || feet.length > 0;
   const centred = parts.filter(p => p.at === 'head');
   const nStages = doc.nStages || 1;
   const STAGE_DT = 0.45, STAGE_LEN = 1.0;
   const tGrav = 0.2 + (nStages - 1) * STAGE_DT + STAGE_LEN;
   const stageK = new Float32Array(Math.ceil(nStages + 2) * 2);
   const stageOf = (stage, T) => { const u = Math.min(1, Math.max(0, (T - 0.2 - stage * STAGE_DT) / STAGE_LEN)); return u * u * (3 - 2 * u); };
-  const caps = BODY.capsules;
+  const caps = BODY.capsules.concat(feet);
+  // bounding boxes (with the cloth thickness) to skip far capsules quickly
+  const capBox = caps.map(c => { const r = Math.max(c.ra, c.rb) + 0.5; return [0, 1, 2].map(q => [Math.min(c.a[q], c.b[q]) - r, Math.max(c.a[q], c.b[q]) + r]); });
   let time = 0;
   function step(dt, opts = {}) {
     time += dt;
@@ -915,6 +1108,7 @@ function makeSim(doc) {
         for (const v of vs) { pos[v * 3] += (cx - pos[v * 3]) * f; pos[v * 3 + 1] += (cy - pos[v * 3 + 1]) * f; pos[v * 3 + 2] += (cz - pos[v * 3 + 2]) * f; }
       } }
       if (it % 2 === 1 || it === iters - 1) collide();
+      if (it === (iters >> 1) || it === iters - 1) selfCollide();
     }
     // a head holds a hat centred: keep head-placed pieces on the head's axis (x, z)
     for (const p of centred) {
@@ -936,7 +1130,9 @@ function makeSim(doc) {
             prev[ix] = prev[ix] * 0.3 + pos[ix] * 0.7; prev[ix + 2] = prev[ix + 2] * 0.3 + pos[ix + 2] * 0.7; prev[ix + 1] = prev[ix + 1] * 0.5 + pos[ix + 1] * 0.5; px = pos[ix]; py = pos[ix + 1]; pz = pos[ix + 2]; }
         }
       }
-      for (const c of caps) {
+      for (let ci = 0; ci < caps.length; ci++) {
+        const c = caps[ci], bb = capBox[ci];
+        if (px < bb[0][0] || px > bb[0][1] || py < bb[1][0] || py > bb[1][1] || pz < bb[2][0] || pz > bb[2][1]) continue;
         const ax = c.a[0], ay = c.a[1], az = c.a[2];
         const bx = c.b[0] - ax, by = c.b[1] - ay, bz = c.b[2] - az;
         const L2 = bx * bx + by * by + bz * bz;
@@ -969,7 +1165,7 @@ function makeSim(doc) {
   function endGrab() { grab = null; }
   function reset() { time = 0; parts.forEach(p => pos.set(p.pos0, p.offset * 3)); prev.set(pos); }
   function seamGap() { let m = 0; for (let c = 0; c < S.length; c += 2) { const a = S[c] * 3, b = S[c + 1] * 3; m = Math.max(m, Math.hypot(pos[a] - pos[b], pos[a + 1] - pos[b + 1], pos[a + 2] - pos[b + 2])); } return m; }
-  return { parts, pos, step, reset, seamGap, startGrab, endGrab, get grab() { return grab; }, seams: S, useTable, stageOf, tGrav, nStages, settleT: tGrav + 6, nSeam: S.length / 2, get time() { return time; }, N };
+  return { parts, pos, step, reset, seamGap, restNear: (i, j) => fabricNear(i, j) || sameSeamStretch(i, j), feet, startGrab, endGrab, get grab() { return grab; }, seams: S, useTable, stageOf, tGrav, nStages, settleT: tGrav + 6, nSeam: S.length / 2, get time() { return time; }, N };
 }
 
 function run(src, overrides) {
