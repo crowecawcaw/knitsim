@@ -101,6 +101,8 @@ export class KnitScene {
   private camTween: { from: Cam; to: Cam; t0: number; dur: number } | null = null;
   private cam: Cam = { target: new THREE.Vector3(0, MAT_Y, 0), dist: 80, phi: 0.01, theta: 0, fov: 22 };
   private camSet = false; private sized = false;
+  /** the piece the camera was last focused on (pieces mode), kept framed when the free area changes */
+  private focused: string | null = null;
   private insets: Insets = { l: 0, r: 0, t: 0, b: 0 };
   private simRunning = false; private simT = 0; private relaxUntil = 0; private lastT = 0;
   private raf = 0;
@@ -179,17 +181,24 @@ export class KnitScene {
     this.insets = i; this.sized = false;
   }
 
-  fit(dur = 0.8) { this.tweenCam(this.camPreset(this.mode), dur); }
+  fit(dur = 0.8) { this.focused = null; this.tweenCam(this.camPreset(this.mode), dur); }
 
   focusPiece(name: string) {
     if (this.mode !== 'pieces') return;
-    const part = this.parts.find((p) => p.P.name === name); if (!part || !part.flatBox) return;
+    this.focused = name;
+    const c = this.focusPreset(); if (c) this.tweenCam(c, 0.8);
+  }
+
+  private focusPreset() {
+    if (this.mode !== 'pieces' || !this.focused) return null;
+    const part = this.parts.find((p) => p.P.name === this.focused); if (!part || !part.flatBox) return null;
     const b = part.flatBox;
-    this.tweenCam(this.camPreset('pieces', { x0: b.x0 - 3, x1: b.x1 + 3, z0: b.z0 - 3, z1: b.z1 + 5 }), 0.8);
+    return this.camPreset('pieces', { x0: b.x0 - 3, x1: b.x1 + 3, z0: b.z0 - 3, z1: b.z1 + 5 });
   }
 
   setMode(m: ViewMode) {
     if (m === this.mode) return;
+    this.focused = null;
     if (!this.sim) { this.mode = m; return; }
     const prev = this.mode; this.mode = m;
     this.simRunning = false;
@@ -364,7 +373,7 @@ export class KnitScene {
     const W = h.clientWidth, H = h.clientHeight;
     if (!W || !H) return { w: 1.3, h: 1, W: 1.3, H: 1 };
     const fw = W - i.l - i.r, fh = H - i.t - i.b;
-    return fw > W * 0.35 && fh > H * 0.35 ? { w: fw, h: fh, W, H } : { w: W, h: H, W, H };
+    return fw > W * 0.35 && fh > H * 0.2 ? { w: fw, h: fh, W, H } : { w: W, h: H, W, H };
   }
   private aspect() { const f = this.free(); return f.w / f.h; }
   private fitDist(w: number, h: number, fov: number) {
@@ -427,7 +436,7 @@ export class KnitScene {
   }
   private updateStatus() {
     const s = this.sim; const el = this.statusEl; if (!s) return;
-    if (this.mode === 'pieces') { el.textContent = `${s.parts.length} piece${s.parts.length > 1 ? 's' : ''} on a 1″ grid · drag to pan, scroll to zoom, tap a stitch`; return; }
+    if (this.mode === 'pieces') { el.textContent = `${s.parts.length} piece${s.parts.length > 1 ? 's' : ''} on a 1″ grid · ${matchMedia('(pointer: coarse)').matches ? 'pinch to zoom' : 'drag to pan, scroll to zoom'}, tap a stitch`; return; }
     if (this.mode === 'aligned') { el.textContent = `Pieces lined up where they'll be sewn · drag to orbit, two fingers to pan`; return; }
     const T = this.simT; let txt: string;
     if (!this.simRunning && this.posAssembled) txt = 'Drag the fabric to tug it · drag around it to orbit';
@@ -444,7 +453,13 @@ export class KnitScene {
     const R = this.R;
     if (!this.sized || R.domElement.width !== Math.floor(w * R.getPixelRatio()) || R.domElement.height !== Math.floor(h * R.getPixelRatio())) {
       R.setSize(w, h); this.applyViewOffset(w, h);
-      if (!this.sized) { this.sized = true; Object.assign(this.cam, this.camPreset(this.mode)); }
+      if (!this.sized) {
+        this.sized = true;
+        const to = this.focusPreset() ?? this.camPreset(this.mode);
+        // a flight in progress lands on the reframed view instead
+        if (this.camTween) this.camTween.to = { ...to, theta: this.camTween.to.theta };
+        else Object.assign(this.cam, to);
+      }
     }
     const now = performance.now(); const dt = Math.min(0.1, (now - (this.lastT || now)) / 1000); this.lastT = now;
     const s = this.sim;

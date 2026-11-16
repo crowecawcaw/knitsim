@@ -10,7 +10,10 @@ import { Inspector } from './components/Inspector';
 import { Viewer, type ViewerHandle } from './components/Viewer';
 import { KnitControls } from './components/KnitControls';
 import { curRowIndex } from './draw/stitches';
-import { isStacked, STACKED_QUERY } from './layout';
+import { useStacked } from './layout';
+import { Steps } from './components/Steps';
+import { MoreMenu, type MenuItem } from './components/MoreMenu';
+import { IconCheck, IconChecks, IconCode, IconFit, IconList, IconShare, IconSliders, IconSpark } from './components/Icons';
 import { Card } from './components/Card';
 import { loadPref, savePref } from './prefs';
 
@@ -21,6 +24,9 @@ function useDebounced<T>(value: T, ms: number): T {
 }
 
 interface KnitRaw { doc: KnitDoc | null; curPiece: string | null; progress: number; selected: Stitch | null }
+
+type PhoneTab = 'steps' | 'adjust';
+const PHONE_TABS: { key: PhoneTab; label: string }[] = [{ key: 'steps', label: 'Steps' }, { key: 'adjust', label: 'Adjust' }];
 
 const MODE_LABEL: Record<ViewMode, string> = { pieces: 'Pieces', aligned: 'Laid out', assembled: 'Assembled' };
 
@@ -66,24 +72,44 @@ export function App() {
     progress: st.piece === curPiece ? progress : doc.built.pieces[st.piece].total,
   }), [doc, curPiece, progress]);
   const clearStitch = () => setRaw((r) => ({ ...r, selected: null }));
-  // the project cards can be hidden. On wide screens they start shown (unless hidden last time);
-  // on small screens they are a sheet over the knit, one sheet at a time
-  const panelDefault = () => !isStacked() && loadPref('panel') !== 'hidden';
-  const [sheet, setSheet] = useState(panelDefault);
-  useEffect(() => {
-    const mq = window.matchMedia(STACKED_QUERY);
-    const on = () => setSheet(panelDefault());
-    mq.addEventListener('change', on); return () => mq.removeEventListener('change', on);
-  }, []);
-  useEffect(() => { if (selected && isStacked()) setSheet(false); }, [selected]);
-  const toggleSheet = () => {
-    if (isStacked()) { if (!sheet) clearStitch(); }
-    else savePref('panel', sheet ? 'hidden' : 'shown');
-    setSheet(!sheet);
+  const stacked = useStacked();
+  // wide screens: the project cards float on the left and can be hidden (remembered)
+  const [sheet, setSheet] = useState(() => loadPref('panel') !== 'hidden');
+  const toggleSheet = () => { savePref('panel', sheet ? 'hidden' : 'shown'); setSheet(!sheet); };
+  // phones: one panel at a time opens above the player, picked from the tab bar under it
+  const [phoneTab, setPhoneTab] = useState<PhoneTab | null>(null);
+  const pickTab = (t: PhoneTab) => {
+    if (selected) clearStitch();
+    const next = t === phoneTab && !selected ? null : t;
+    setPhoneTab(next);
+    // following the pattern: bring the piece being knitted up close
+    if (next === 'steps' && curPiece) viewer.current?.focusPiece(curPiece);
+    else if (!next) viewer.current?.fit();
   };
   // the player can shrink to a small pill
   const [dockMini, setDockMini] = useState(() => loadPref('dock') === 'mini');
   const toggleDock = () => { savePref('dock', dockMini ? 'full' : 'mini'); setDockMini(!dockMini); };
+  // the knit is framed in the space the header and dock leave free
+  const topRef = useRef<HTMLElement>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
+  const [chrome, setChrome] = useState({ t: 0, b: 0, r: 0 });
+  useEffect(() => {
+    const measure = () => {
+      const t = topRef.current?.getBoundingClientRect().bottom ?? 0;
+      const d = dockRef.current?.getBoundingClientRect();
+      // phones in landscape keep the sheet on the right; everywhere else it sits along the bottom
+      const side = !!d && stacked && window.innerWidth > window.innerHeight;
+      const b = d && !side ? window.innerHeight - d.top : 0;
+      const r = d && side ? window.innerWidth - d.left : 0;
+      setChrome((c) => (Math.abs(c.t - t) < 2 && Math.abs(c.b - b) < 2 && Math.abs(c.r - r) < 2 ? c : { t: Math.round(t), b: Math.round(b), r: Math.round(r) }));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    if (topRef.current) ro.observe(topRef.current);
+    if (dockRef.current) ro.observe(dockRef.current);
+    window.addEventListener('resize', measure);
+    return () => { ro.disconnect(); window.removeEventListener('resize', measure); };
+  }, [stacked]);
 
   // the source drawer holds everything technical: the DSL and the checks
   const drawerOpen = tab !== 'sim';
@@ -111,16 +137,87 @@ export function App() {
     catch { setCopied('failed'); }
     setTimeout(() => setCopied(''), 2000);
   };
+  // phones get the system share sheet (message a friend); elsewhere the link is copied
+  const share = async () => {
+    if (stacked && navigator.share) {
+      try { await navigator.share({ title: doc.name || 'KnitSim pattern', url: location.href }); } catch { /* cancelled */ }
+      return;
+    }
+    copy('link');
+  };
+
+  const problems = errs + failed;
+  const menu: MenuItem[] = [
+    ...(stacked ? [{ label: 'Fit to view', icon: <IconFit />, onClick: () => viewer.current?.fit() }] : []),
+    { label: 'Pattern code', icon: <IconCode />, onClick: () => patch({ tab: 'pattern' }) },
+    { label: 'Checks', icon: <IconChecks />, onClick: () => patch({ tab: 'checks' }), hint: problems > 0 ? <span className="badge">{problems}</span> : <span className="good">all pass</span> },
+    { label: copied === 'prompt' ? 'Copied ✓' : 'Copy prompt for an AI agent', icon: <IconSpark />, onClick: () => copy('prompt') },
+  ];
+
+  const patternPicker = (
+    <select className="soft-select" aria-label="Example pattern" value={example?.key ?? ''} onChange={(e) => loadExample(e.target.value)}>
+      {!example && <option value="">{doc.name || 'Custom pattern'}</option>}
+      {EXAMPLES.map((e) => <option key={e.key} value={e.key}>{e.label}</option>)}
+    </select>
+  );
+  const adjust = (
+    <>
+      {!stacked && patternPicker}
+      {doc.source && <a className="soft-link" href={doc.source} target="_blank" rel="noopener">Original pattern ↗</a>}
+      {doc.params.length > 0 && (
+        <>
+          <h3>Make it yours</h3>
+          <Params
+            params={doc.params}
+            onSet={(name, v) => patch({ params: { ...params, [name]: v } })}
+            onReset={(name) => { const p = { ...params }; delete p[name]; patch({ params: p }); }}
+          />
+        </>
+      )}
+    </>
+  );
+  const seamSwitch = (
+    <label className="switch">
+      <input type="checkbox" checked={showSeams} onChange={(e) => setShowSeams(e.target.checked)} />
+      <span className="track" /> Show seams
+    </label>
+  );
+  const pieces = (
+    <>
+      <div className="chips">
+        {names.map((n) => <button key={n} className={'chip' + (n === curPiece ? ' on' : '')} onClick={() => selectPiece(n)}>{n.replace(/_/g, ' ')}</button>)}
+      </div>
+      {mode !== 'pieces' && seamSwitch}
+    </>
+  );
+  const steps = <Steps piece={piece} progress={progress} setProgress={setProgress} />;
+  const pieceChips = names.length > 1 && (
+    <div className="chips chips-row">
+      {names.map((n) => <button key={n} className={'chip' + (n === curPiece ? ' on' : '')} onClick={() => selectPiece(n)}>{n.replace(/_/g, ' ')}</button>)}
+    </div>
+  );
+
+  const phonePanel = !stacked ? null
+    : selected ? <div className="scroll-y"><Inspector doc={doc} stitch={selected} onClose={clearStitch} /></div>
+    : phoneTab === 'steps' ? <>{pieceChips}<div className="scroll-y">{steps}</div></>
+    : phoneTab === 'adjust' ? <div className="scroll-y">{patternPicker}{adjust}{mode !== 'pieces' && seamSwitch}</div>
+    : null;
 
   return (
-    <div className={'app' + (drawerOpen ? ' drawer-open' : '')}>
-      <header className="topbar">
+    <div className={'app' + (drawerOpen ? ' drawer-open' : '') + (stacked ? ' phone' : '') + (phonePanel ? ' panel-open' : '')}>
+      <header className="topbar" ref={topRef}>
         <div className="brand">
           <YarnLogo />
-          <div>
-            <h1>KnitSim</h1>
-            <p>Watch a pattern knit itself</p>
-          </div>
+          {stacked ? (
+            <button className="title-btn" onClick={() => pickTab('adjust')} aria-label="Change pattern">
+              <span className="title-name">{example?.label ?? (doc.name || 'Custom pattern')}</span>
+            </button>
+          ) : (
+            <div>
+              <h1>KnitSim</h1>
+              <p>Watch a pattern knit itself</p>
+            </div>
+          )}
         </div>
         <div className="pill-seg" role="tablist" aria-label="View">
           {(['pieces', 'aligned', 'assembled'] as ViewMode[]).map((m) => (
@@ -130,79 +227,70 @@ export function App() {
           ))}
         </div>
         <div className="top-actions">
-          <button className={'icon-btn' + (sheet ? ' on' : '')} title={sheet ? 'Hide project and pieces' : 'Show project and pieces'} aria-label="Project and pieces" aria-expanded={sheet} onClick={toggleSheet}>
-            <svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /><circle cx="16" cy="7" r="2" fill="none" stroke="currentColor" strokeWidth="1.8" /><circle cx="10" cy="17" r="2" fill="none" stroke="currentColor" strokeWidth="1.8" /></svg>
+          {!stacked && (
+            <>
+              <button className={'icon-btn' + (sheet ? ' on' : '')} title={sheet ? 'Hide project and pieces' : 'Show project and pieces'} aria-label="Project and pieces" aria-expanded={sheet} onClick={toggleSheet}>
+                <IconSliders />
+              </button>
+              <button className="icon-btn" title="Fit to view" aria-label="Fit to view" onClick={() => viewer.current?.fit()}><IconFit /></button>
+            </>
+          )}
+          <button className="icon-btn" title="Share a link to this view" aria-label="Share" onClick={share}>
+            {copied === 'link' ? <IconCheck /> : <IconShare />}
           </button>
-          <button className="icon-btn" title="Fit to view" aria-label="Fit to view" onClick={() => viewer.current?.fit()}>
-            <svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
-          </button>
-          <button className="icon-btn" title="Copy share link" aria-label="Copy share link" onClick={() => copy('link')}>
-            {copied === 'link'
-              ? <svg viewBox="0 0 24 24" width="20" height="20"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
-              : <svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 15V4M8 8l4-4 4 4M5 13v6h14v-6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>}
-          </button>
-          <button className="dark-btn" aria-label="Pattern source" onClick={() => patch({ tab: drawerOpen ? 'sim' : 'pattern' })}>
-            <span className="mono">&lt;/&gt;</span> <span className="label">{drawerOpen ? 'Close' : 'Pattern'}</span>
-            {(errs > 0 || failed > 0) && !drawerOpen && <span className="dot-alert" title="The pattern has problems" />}
-          </button>
+          <MoreMenu items={menu} alert={problems > 0} />
         </div>
       </header>
+      {copied === 'link' && <div className="toast" role="status">Link copied</div>}
 
       <main className="stage">
-        <Viewer ref={viewer} doc={doc} mode={mode} showSeams={showSeams} knit={knit} onPick={selectStitch} panelOpen={sheet} dockMini={dockMini} />
+        <Viewer ref={viewer} doc={doc} mode={mode} showSeams={showSeams} knit={knit} onPick={selectStitch} chrome={stacked && !chrome.r && !phonePanel ? { ...chrome, t: chrome.t + 26 } : chrome} panelOpen={!stacked && sheet} />
 
-        <aside className={'float float-left' + (sheet ? ' open' : '')}>
-          <Card id="project" icon="◍" title="Project">
-            <select className="soft-select" aria-label="Example pattern" value={example?.key ?? ''} onChange={(e) => loadExample(e.target.value)}>
-              {!example && <option value="">{doc.name || 'Custom pattern'}</option>}
-              {EXAMPLES.map((e) => <option key={e.key} value={e.key}>{e.label}</option>)}
-            </select>
-            {doc.source && <a className="soft-link" href={doc.source} target="_blank" rel="noopener">Original pattern ↗</a>}
-            {doc.params.length > 0 && (
-              <>
-                <h3>Make it yours</h3>
-                <Params
-                  params={doc.params}
-                  onSet={(name, v) => patch({ params: { ...params, [name]: v } })}
-                  onReset={(name) => { const p = { ...params }; delete p[name]; patch({ params: p }); }}
-                />
-              </>
-            )}
-          </Card>
-          {names.length > 0 && (
-            <Card id="pieces" icon="▦" title="Pieces">
-              <div className="chips">
-                {names.map((n) => <button key={n} className={'chip' + (n === curPiece ? ' on' : '')} onClick={() => selectPiece(n)}>{n.replace(/_/g, ' ')}</button>)}
-              </div>
-              {mode !== 'pieces' && (
-                <label className="switch">
-                  <input type="checkbox" checked={showSeams} onChange={(e) => setShowSeams(e.target.checked)} />
-                  <span className="track" /> Show seams
-                </label>
-              )}
-            </Card>
-          )}
-        </aside>
+        {!stacked && (
+          <aside className={'float float-left' + (sheet ? ' open' : '')}>
+            <Card id="project" icon="◍" title="Project">{adjust}</Card>
+            {names.length > 0 && <Card id="pieces" icon="▦" title="Pieces">{pieces}</Card>}
+            {piece && <Card id="steps" icon="≡" title="Steps"><div className="scroll-y steps-box">{steps}</div></Card>}
+          </aside>
+        )}
 
-        {selected && (
+        {!stacked && selected && (
           <aside className="float float-right">
             <Inspector doc={doc} stitch={selected} onClose={clearStitch} />
           </aside>
         )}
 
-        <div className={'dock' + (dockMini ? ' mini' : '')}>
-          <KnitControls piece={piece} progress={progress} setProgress={setProgress} onInspect={selectStitch} mini={dockMini} onToggleMini={toggleDock} />
+        <div className={'dock' + (!stacked && dockMini ? ' mini' : '') + (phonePanel ? ' has-panel' : '')} ref={dockRef}>
+          {stacked ? (
+            <div className="sheet card">
+              {phonePanel && <div className="sheet-panel">{phonePanel}</div>}
+              <KnitControls piece={piece} progress={progress} setProgress={setProgress} onInspect={selectStitch} mini={false} onToggleMini={toggleDock} compact />
+              <nav className="tabbar" aria-label="Panels">
+                {PHONE_TABS.map(({ key, label }) => {
+                  const on = phoneTab === key && !selected;
+                  return (
+                    <button key={key} className={on ? 'on' : ''} aria-pressed={on} onClick={() => pickTab(key)}>
+                      {key === 'steps' ? <IconList size={18} /> : <IconSliders size={18} />}
+                      {label}
+                    </button>
+                  );
+                })}
+              </nav>
+            </div>
+          ) : (
+            <KnitControls piece={piece} progress={progress} setProgress={setProgress} onInspect={selectStitch} mini={dockMini} onToggleMini={toggleDock} />
+          )}
         </div>
       </main>
 
       <div className="scrim" onClick={() => patch({ tab: 'sim' })} />
       <aside className="drawer" aria-hidden={!drawerOpen}>
         <div className="drawer-head">
-          <h2>Pattern<span className="wide-only"> source</span></h2>
+          <h2>Pattern code</h2>
           <div className="seg-mini">
             <button className={tab === 'pattern' ? 'on' : ''} onClick={() => patch({ tab: 'pattern' })}>Code</button>
             <button className={tab === 'checks' ? 'on' : ''} onClick={() => patch({ tab: 'checks' })}>
-              Checks{errs + failed > 0 && <span className="badge">{errs + failed}</span>}
+              Checks{problems > 0 && <span className="badge">{problems}</span>}
             </button>
           </div>
           <button className="icon-btn" aria-label="Close" onClick={() => patch({ tab: 'sim' })}>✕</button>

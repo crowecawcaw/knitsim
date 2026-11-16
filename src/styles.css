@@ -181,41 +181,96 @@ pre.ref { font: 12px/1.5 "IBM Plex Mono", monospace; white-space: pre-wrap; back
 .ptable td, .ptable th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 .ptable th { color: var(--mut); font-weight: 600; }
 
-/* ---------- narrow screens: knit full screen, cards open as a sheet ---------- */
-@media (max-width: 860px) {
-  .topbar { padding: 10px 12px; gap: 8px; }
-  .brand { padding: 4px 10px 4px 4px; }
-  .brand p { display: none; }
-  .pill-seg { order: 3; width: 100%; }
-  .pill-seg button { flex: 1; padding: 8px 6px; }
-  .dock { left: 12px; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); transform: none; width: auto; }
-  .dock.mini { left: auto; }
-  .player.mini { border-radius: 999px; }
-  .player.mini .scrub { width: min(200px, 44vw); }
-  .float { left: 12px; right: 12px; top: auto; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 104px); width: auto; max-height: calc(100dvh - 250px); padding: 0; border-radius: var(--r); }
-  .float.open { box-shadow: 0 -10px 40px -18px rgba(0,0,0,0.35); }
-  .player { border-radius: var(--r); padding: 12px 14px; gap: 12px; }
-  .play { width: 46px; height: 46px; }
-  .rowinfo { white-space: normal; }
-  .rowinfo > div { display: none; }
-  .steppers .icon-btn:nth-child(1), .steppers .icon-btn:nth-child(4) { display: none; }
-  #simStatus { top: 116px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
-}
+/* ---------- shared: menu, toast, written steps ---------- */
+.more { position: relative; }
+.more .dot-alert { top: 6px; right: 6px; border-color: #fff; }
+.menu { position: absolute; right: 0; top: calc(100% + 6px); min-width: 260px; background: var(--card-solid); border-radius: 16px; box-shadow: 0 12px 40px -8px rgba(0,0,0,0.28), 0 0 0 1px rgba(0,0,0,0.04); padding: 6px; z-index: 20; display: flex; flex-direction: column; }
+.menu button { appearance: none; border: 0; background: none; display: flex; align-items: center; gap: 10px; padding: 10px 10px; border-radius: 10px; font-size: 14.5px; font-weight: 600; color: var(--ink); cursor: pointer; text-align: left; }
+.menu button:hover, .menu button:focus-visible { background: var(--soft); outline: none; }
+.menu-ico { display: inline-grid; place-items: center; color: var(--mut); width: 20px; }
+.menu-label { flex: 1; }
+.menu-hint { font-size: 12.5px; font-weight: 700; }
+.toast { position: absolute; top: 64px; left: 50%; transform: translateX(-50%); z-index: 30; background: #262320; color: #fff; font-size: 13.5px; font-weight: 700; padding: 8px 16px; border-radius: 999px; box-shadow: 0 6px 16px -6px rgba(0,0,0,0.45); }
+
+.scroll-y { overflow-y: auto; min-height: 0; overscroll-behavior: contain; position: relative; }
+.steps-box { max-height: 300px; margin: 0 -6px; }
+.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.steps button { appearance: none; border: 0; background: none; width: 100%; text-align: left; cursor: pointer; display: grid; grid-template-columns: 1fr auto; column-gap: 10px; padding: 8px 10px; border-radius: 12px; color: var(--ink); font: inherit; }
+.steps button:hover { background: var(--soft); }
+.st-label { grid-column: 1; font-size: 12px; font-weight: 800; color: var(--mut); letter-spacing: 0.02em; }
+.st-side { font-weight: 700; opacity: 0.8; }
+.st-what { grid-column: 1; font-size: 14px; font-weight: 600; line-height: 1.35; }
+.st-count { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-size: 12px; font-weight: 700; color: var(--mut); white-space: nowrap; }
+.steps .done button { color: var(--mut); }
+.steps .done .st-what { font-weight: 500; }
+.steps .cur button { background: var(--acc-soft); box-shadow: inset 3px 0 0 var(--acc); }
+.steps .cur .st-label { color: #5b43a6; }
+.chips-row { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 10px; margin: 0 -14px; padding-left: 14px; padding-right: 14px; flex: none; }
+.chips-row::-webkit-scrollbar { display: none; }
+.chips-row .chip { flex: none; }
+.ri-1, .ri-2 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ri-2 { font-size: 12px; margin-top: 1px; }
+.ri-2 a { font-weight: 700; text-decoration: none; }
+
 @media (min-width: 1400px) { .float { max-height: calc(100% - 100px); } }
 
-/* ---------- phones ---------- */
+/* ---------- phones: the knit fills the screen; one sheet at the bottom holds the player and its panels ---------- */
+.phone .topbar { padding: 8px 10px 0; gap: 8px; }
+.phone .brand { background: none; padding: 0; gap: 8px; min-width: 0; flex: 1; }
+.phone .logo-mark { width: 26px; height: 26px; flex: none; }
+.title-btn { appearance: none; border: 0; background: none; padding: 4px 0; font: 800 18px/1.2 Nunito, sans-serif; letter-spacing: -0.01em; color: var(--ink); cursor: pointer; min-width: 0; display: flex; align-items: center; gap: 4px; }
+.title-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.phone .top-actions { gap: 2px; margin-left: 0; }
+.phone .top-actions .icon-btn { width: 38px; height: 38px; border-radius: 12px; background: color-mix(in srgb, var(--bg) 82%, transparent); box-shadow: none; color: #4a443e; }
+.phone .pill-seg { order: 3; width: 100%; padding: 3px; box-shadow: none; background: #e9e4de; }
+.phone .pill-seg button { flex: 1; padding: 6px 4px; font-size: 14px; }
+.phone .pill-seg button.on { box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+.phone #simStatus { top: 96px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; padding: 4px 12px; }
+.phone .toast { top: 100px; }
+.phone.panel-open #simStatus { display: none; }
+
+.phone .dock { left: 10px; right: 10px; bottom: max(8px, env(safe-area-inset-bottom)); transform: none; width: auto; }
+.sheet { padding: 0; border-radius: 22px; display: flex; flex-direction: column; overflow: hidden; }
+.sheet-panel { display: flex; flex-direction: column; max-height: min(36dvh, 340px); min-height: 0; padding: 14px 14px 10px; border-bottom: 1px solid var(--line); }
+.sheet-panel > .scroll-y { margin: 0 -14px; padding: 0 14px; }
+.sheet-panel .steps { margin: 0 -6px; }
+.sheet-panel h3 { margin: 14px 0 8px; font-size: 12px; font-weight: 700; color: var(--mut); text-transform: uppercase; letter-spacing: 0.06em; }
+.sheet-panel .soft-select { padding: 9px 36px 9px 12px; border-radius: 12px; }
+.sheet-panel .card { background: none; border: 0; box-shadow: none; padding: 0; border-radius: 0; }
+.sheet-panel #inspector h2 { font-size: 16px; margin-bottom: 8px; }
+.sheet-panel #anim { max-height: 15dvh; width: auto; max-width: 100%; margin: 0 auto; }
+.sheet-panel #inspector .step { min-height: 0; margin: 8px 0 6px; font-size: 13.5px; }
+.sheet-panel .facts { margin-bottom: 6px; }
+.sheet-panel .facts div { padding: 5px 8px; }
+.sheet-panel .switch { margin-top: 12px; }
+.sheet .player { padding: 10px 12px 2px 10px; gap: 10px; border-radius: 0; background: none; border: 0; box-shadow: none; }
+.sheet .play { width: 40px; height: 40px; box-shadow: 0 0 0 1px var(--line), 0 2px 6px -2px rgba(0,0,0,0.2); }
+.sheet .player-top { gap: 4px; }
+.sheet .rowinfo { font-size: 14px; white-space: normal; }
+.sheet .steppers .icon-btn.small { width: 36px; height: 36px; border-radius: 10px; }
+.sheet .scrub { height: 24px; margin: 0; }
+.sheet .scrub::-webkit-slider-thumb { width: 20px; height: 20px; margin-top: -7px; }
+.tabbar { display: grid; grid-template-columns: repeat(2, 1fr); padding: 2px 6px 6px; gap: 4px; }
+.tabbar button { appearance: none; border: 0; background: none; height: 38px; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 14px; font-weight: 700; color: var(--mut); cursor: pointer; }
+.tabbar button.on { background: var(--acc-soft); color: #5b43a6; }
+
+/* phone controls: comfortable to tap, but no bigger than they need to be */
+.phone .chip, .phone .param .opt { padding: 6px 12px; font-size: 14px; }
+.phone .param .opt { min-width: 44px; }
+.phone .soft-link { font-size: 14px; }
+.phone .param { font-size: 14px; }
+.phone .params { gap: 10px; }
+.phone .param { gap: 4px; }
+.phone .param .pv { gap: 4px; flex-wrap: nowrap; }
+.phone .param .pv:not(:has(input[type=range])) { flex-wrap: wrap; }
+.phone .param input[type=range] { min-width: 0; }
+.phone .param input[type=number] { width: 56px; padding: 5px 4px; }
+.phone .param input[type=color] { width: 30px; height: 30px; }
+/* iOS zooms the page when a focused field's text is under 16px */
+.phone .soft-select, .phone .param select, .phone .param input[type=number], .phone #src { font-size: 16px; }
+
 @media (max-width: 860px) {
-  .top-actions { gap: 2px; }
-  .steppers .icon-btn.small { width: 38px; height: 38px; font-size: 17px; }
-  .speed { padding: 6px 10px; font-size: 13px; }
   .wide-only { display: none; }
-  .rowinfo { font-size: 14.5px; }
-  .scrub { height: 30px; }
-  .scrub::-webkit-slider-thumb { width: 24px; height: 24px; margin-top: -9px; }
-  .chip, .param .opt { padding: 8px 14px; font-size: 14px; }
-  .icon-btn.small { width: 38px; height: 38px; }
-  /* iOS zooms the page when a focused field's text is under 16px */
-  .soft-select, .param select, .param input[type=number], #src { font-size: 16px; }
   #src, #gutter { line-height: 23px; }
   #gutter { font-size: 12px; }
   .drawer { top: 0; right: 0; bottom: 0; width: 100%; border-radius: 0; }
@@ -224,28 +279,15 @@ pre.ref { font: 12px/1.5 "IBM Plex Mono", monospace; white-space: pre-wrap; back
   .editor { height: calc(100dvh - 150px); }
   .facts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
-@media (max-width: 420px) {
-  .topbar { padding: 10px 12px; }
-  .brand h1 { font-size: 21px; }
-  .logo-mark { width: 28px; height: 28px; }
-  .dark-btn { padding: 10px 14px; }
-  .dark-btn .label { display: none; }
-  .player { padding: 10px 12px 10px 10px; }
-  .steppers .speed { display: none; }
-}
-/* phone in landscape: one-line header, cards open as a side panel */
+/* phone in landscape: one-line header, the sheet sits at the bottom centre */
 @media (max-width: 960px) and (max-height: 500px) and (orientation: landscape) {
-  .topbar { flex-wrap: nowrap; padding: 6px 12px; gap: 10px; }
-  .brand p { display: none; }
-  .brand h1 { font-size: 20px; }
-  .pill-seg { order: 0; width: auto; }
-  .pill-seg button { flex: none; padding: 6px 12px; font-size: 13px; }
-  .dark-btn { padding: 8px 14px; }
-  .dock { left: 50%; transform: translateX(-50%); bottom: 8px; width: min(560px, calc(100% - 24px)); }
-  .float { top: 58px; bottom: 86px; left: auto; right: auto; width: 300px; max-height: none; padding: 0; }
-  .float-left { left: 12px; }
-  .float-right { right: 12px; left: auto; }
-  .player { border-radius: 20px; padding: 8px 12px; }
-  .play { width: 42px; height: 42px; }
-  #simStatus { display: none; }
+  .phone .topbar { flex-wrap: nowrap; padding: 6px 12px; }
+  .phone .brand { flex: 0 1 auto; }
+  .phone .pill-seg { order: 0; width: auto; margin-left: auto; }
+  .phone .pill-seg button { flex: none; padding: 5px 12px; }
+  .phone .dock { left: auto; right: max(8px, env(safe-area-inset-right)); bottom: 6px; width: min(360px, 48vw); }
+  .phone .dock.has-panel { top: 56px; }
+  .phone .dock.has-panel .sheet { height: 100%; }
+  .sheet-panel { flex: 1; max-height: none; }
+  .phone #simStatus { display: none; }
 }
