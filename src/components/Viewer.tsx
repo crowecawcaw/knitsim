@@ -2,6 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import type { KnitDoc, Stitch } from '../knit';
 import { KnitScene, type KnitState } from '../scene/KnitScene';
 import type { ViewMode } from '../urlState';
+import { STACKED_QUERY } from '../layout';
 
 export interface ViewerHandle { fit: () => void; focusPiece: (name: string) => void }
 
@@ -26,8 +27,8 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer({ doc, mod
     s.mode = mode; // initial mode from the URL, no transition
     scene.current = s;
     // floating cards cover the left edge and the bottom dock on wide screens
-    const mq = window.matchMedia('(min-width: 861px)');
-    const insets = () => s.setInsets(mq.matches ? { l: 330, r: 0, t: 40, b: 130 } : { l: 0, r: 0, t: 0, b: 0 });
+    const mq = window.matchMedia(STACKED_QUERY);
+    const insets = () => s.setInsets(mq.matches ? { l: 0, r: 0, t: 0, b: 0 } : { l: 330, r: 0, t: 40, b: 130 });
     insets(); mq.addEventListener('change', insets);
     return () => { mq.removeEventListener('change', insets); s.dispose(); scene.current = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps

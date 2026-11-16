@@ -10,6 +10,7 @@ import { Inspector } from './components/Inspector';
 import { Viewer, type ViewerHandle } from './components/Viewer';
 import { KnitControls } from './components/KnitControls';
 import { curRowIndex } from './draw/stitches';
+import { isStacked } from './layout';
 
 function useDebounced<T>(value: T, ms: number): T {
   const [v, setV] = useState(value);
@@ -63,6 +64,10 @@ export function App() {
     progress: st.piece === curPiece ? progress : doc.built.pieces[st.piece].total,
   }), [doc, curPiece, progress]);
   const clearStitch = () => setRaw((r) => ({ ...r, selected: null }));
+  useEffect(() => {
+    if (!selected || !isStacked()) return;
+    requestAnimationFrame(() => document.getElementById('inspector')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
+  }, [selected]);
 
   // the source drawer holds everything technical: the DSL and the checks
   const drawerOpen = tab !== 'sim';
@@ -117,8 +122,8 @@ export function App() {
               ? <svg viewBox="0 0 24 24" width="20" height="20"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
               : <svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 15V4M8 8l4-4 4 4M5 13v6h14v-6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>}
           </button>
-          <button className="dark-btn" onClick={() => patch({ tab: drawerOpen ? 'sim' : 'pattern' })}>
-            <span className="mono">&lt;/&gt;</span> {drawerOpen ? 'Close' : 'Pattern'}
+          <button className="dark-btn" aria-label="Pattern source" onClick={() => patch({ tab: drawerOpen ? 'sim' : 'pattern' })}>
+            <span className="mono">&lt;/&gt;</span> <span className="label">{drawerOpen ? 'Close' : 'Pattern'}</span>
             {(errs > 0 || failed > 0) && !drawerOpen && <span className="dot-alert" title="The pattern has problems" />}
           </button>
         </div>
@@ -176,7 +181,7 @@ export function App() {
       <div className="scrim" onClick={() => patch({ tab: 'sim' })} />
       <aside className="drawer" aria-hidden={!drawerOpen}>
         <div className="drawer-head">
-          <h2>Pattern source</h2>
+          <h2>Pattern<span className="wide-only"> source</span></h2>
           <div className="seg-mini">
             <button className={tab === 'pattern' ? 'on' : ''} onClick={() => patch({ tab: 'pattern' })}>Code</button>
             <button className={tab === 'checks' ? 'on' : ''} onClick={() => patch({ tab: 'checks' })}>

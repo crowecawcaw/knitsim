@@ -79,7 +79,7 @@ function RowInfo({ P, progress, onInspect }: { P: Piece | null; progress: number
   if (progress >= P.total) {
     return (
       <>
-        <b className="cap">{name}</b> <span className="muted">· finished · {P.nrows - 1} rows · {P.widthIn.toFixed(1)}″ × {P.heightIn.toFixed(1)}″</span>
+        <b className="cap">{name}</b> <span className="muted">· finished<span className="wide-only"> · {P.nrows - 1} rows · {P.widthIn.toFixed(1)}″ × {P.heightIn.toFixed(1)}″</span></span>
         <div className="muted small">Press play to watch it knit, or tap any stitch to see how it's made.</div>
       </>
     );
