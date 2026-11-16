@@ -167,14 +167,14 @@ function evalExpr(expr, vars, line) {
     even: x => 2 * Math.round(x / 2), odd: x => 2 * Math.floor(x / 2) + 1, mult: (x, m) => m * Math.round(x / m) };
   function prim() {
     ws();
-    if (s[i] === '(') { i++; const v = add(); ws(); if (s[i] !== ')') throw new Error('missing )'); i++; return v; }
+    if (s[i] === '(') { i++; const v = tern(); ws(); if (s[i] !== ')') throw new Error('missing )'); i++; return v; }
     if (s[i] === '-') { i++; return -prim(); }
     const num = /^\d*\.?\d+/.exec(s.slice(i)); if (num) { i += num[0].length; return +num[0]; }
     const str = /^"([^"]*)"/.exec(s.slice(i)); if (str) { i += str[0].length; return str[1]; }
     const id = /^[a-z_][a-z0-9_]*/i.exec(s.slice(i));
     if (id) {
       i += id[0].length; ws();
-      if (s[i] === '(') { i++; const args = []; ws(); if (s[i] !== ')') { args.push(add()); ws(); while (s[i] === ',') { i++; args.push(add()); ws(); } } if (s[i] !== ')') throw new Error('missing )'); i++;
+      if (s[i] === '(') { i++; const args = []; ws(); if (s[i] !== ')') { args.push(tern()); ws(); while (s[i] === ',') { i++; args.push(tern()); ws(); } } if (s[i] !== ')') throw new Error('missing )'); i++;
         if (id[0] === 'pick') { const k = args[0]; return args[1 + k]; }
         if (!FN[id[0]]) throw new Error(`unknown function ${id[0]}()`); return FN[id[0]](...args); }
       if (!(id[0] in vars)) throw new Error(`unknown param "${id[0]}"`);
@@ -204,7 +204,7 @@ function applyParams(src, overrides, errors) {
       try { Object.keys(vars).forEach(k => { if (new RegExp(`\\b${k}\\b`).test(e)) used.add(k); }); return fmtNum(evalExpr(e, vars, i + 1)); }
       catch (err) { errors.push({ line: i + 1, level: 'error', msg: `In \${${e}}: ${err.message}` }); return '0'; }
     });
-    c = c.replace(/(^|[\s=])((?:[\d.]+(?:in|cm)?)(?:\/[\d.]+(?:in|cm)?)+)(?=\s|$|;)/g, (m0, pre, list) => {
+    c = c.replace(/(^|[\s=:])((?:[\d.]+(?:in|cm)?)(?:\/[\d.]+(?:in|cm)?)+)(?=\s|$|;)/g, (m0, pre, list) => {
       const vals = list.split('/');
       if (!sizeP) { errors.push({ line: i + 1, level: 'error', msg: `Per-size list "${list}" needs a size param, e.g. param size enum ${vals.map((_, k) => 'S' + (k + 1)).join(' ')}` }); return pre + vals[0]; }
       used.add(sizeP.name);
@@ -395,8 +395,9 @@ function parseMods(t, line) {
       mods.push({ op: 'dec_every', n }); i += 3; continue;
     }
     if ((w === 'inc' || w === 'dec') && (t[i + 1] === 'edges' || t[i + 1] === 'neck')) {
+      const where = t[i + 1];
       let n = 1; if (/^\d+$/.test(t[i + 2] || '')) { n = +t[i + 2]; i++; }
-      mods.push({ op: w, where: t[i + 1], n }); i += 2; continue;
+      mods.push({ op: w, where, n }); i += 2; continue;
     }
     if (w === 'bind_off' && t[i + 1] === 'center') {
       const n = parseInt(t[i + 2]); if (!(n > 0)) fail(line, 'bind_off center N');

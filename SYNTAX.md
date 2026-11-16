@@ -54,9 +54,10 @@ Syntax: `param NAME TYPE [OPTIONS | MIN..MAX] = DEFAULT ["Label"]`.
 
 - **Expressions:** `${expr}` anywhere in a line, for example `cast_on ${odd(width * sts / 4)}` or `rows until ${length}in st`.
   The operators are `+ - * / %`, the comparisons `== != < <= > >=` and `cond ? a : b`. The functions are
-  `round ceil floor min max abs even odd mult(x, m)`, and the variable `size_index` is also available.
+  `round ceil floor min max abs even odd mult(x, m)` and `pick(i, a, b, …)` (the i-th value, counting from 0). The variable `size_index`
+  is also available, so `${pick(size_index, 30, 34, 38) * 2}` is a per-size value inside an expression.
 - **Per-size lists:** `a/b/c` picks the value for the current size. The size comes from the `size` param, or from the
-  first `enum` if there is no `size`. The list must have one value per option: `cast_on 50/54/58`, `rows until 2.5/2.5/3in rib2x2`.
+  first `enum` if there is no `size`. The list must have one value per option: `cast_on 50/54/58`, `rows until 2.5/2.5/3in rib2x2`, `garter:4/6/6 st garter:4/6/6`.
 
 ## Pieces
 
@@ -138,6 +139,8 @@ piece.top         piece.top.1        piece.neck
 The checker compares seam lengths: within 5% passes, 5–15% is reported as ease, and more than that is a mismatch.
 
 ## Tips
+
+- See [docs/USE_CASES.md](docs/USE_CASES.md) for what real patterns need that the language can't express yet.
 
 - Add an `expect` line wherever the written pattern states a stitch count, so the checker can verify the translation.
 - Translate every size the pattern gives, and make the gauge a param when the pattern says "check your gauge".
