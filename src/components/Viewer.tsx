@@ -26,11 +26,14 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer({ doc, mod
     const s = new KnitScene(host.current!, status.current!, { onPick: (st) => onPickRef.current(st) });
     s.mode = mode; // initial mode from the URL, no transition
     scene.current = s;
-    // floating cards cover the left edge and the bottom dock on wide screens
+    // the view fills the window; keep the knit clear of the header, cards and dock floating over it
     const mq = window.matchMedia(STACKED_QUERY);
-    const insets = () => s.setInsets(mq.matches ? { l: 0, r: 0, t: 0, b: 0 } : { l: 330, r: 0, t: 40, b: 130 });
-    insets(); mq.addEventListener('change', insets);
-    return () => { mq.removeEventListener('change', insets); s.dispose(); scene.current = null; };
+    const insets = () => {
+      const landscape = mq.matches && window.innerHeight < window.innerWidth;
+      s.setInsets(!mq.matches ? { l: 330, r: 0, t: 80, b: 130 } : landscape ? { l: 0, r: 0, t: 56, b: 110 } : { l: 0, r: 0, t: 120, b: 130 });
+    };
+    insets(); mq.addEventListener('change', insets); window.addEventListener('resize', insets);
+    return () => { mq.removeEventListener('change', insets); window.removeEventListener('resize', insets); s.dispose(); scene.current = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

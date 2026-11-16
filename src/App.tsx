@@ -64,10 +64,10 @@ export function App() {
     progress: st.piece === curPiece ? progress : doc.built.pieces[st.piece].total,
   }), [doc, curPiece, progress]);
   const clearStitch = () => setRaw((r) => ({ ...r, selected: null }));
-  useEffect(() => {
-    if (!selected || !isStacked()) return;
-    requestAnimationFrame(() => document.getElementById('inspector')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
-  }, [selected]);
+  // on small screens the project cards are a sheet over the knit; one sheet at a time
+  const [sheet, setSheet] = useState(false);
+  useEffect(() => { if (selected && isStacked()) setSheet(false); }, [selected]);
+  const toggleSheet = () => { if (!sheet && isStacked()) clearStitch(); setSheet(!sheet); };
 
   // the source drawer holds everything technical: the DSL and the checks
   const drawerOpen = tab !== 'sim';
@@ -114,6 +114,9 @@ export function App() {
           ))}
         </div>
         <div className="top-actions">
+          <button className={'icon-btn stacked-only' + (sheet ? ' on' : '')} title="Project and pieces" aria-label="Project and pieces" aria-expanded={sheet} onClick={toggleSheet}>
+            <svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /><circle cx="16" cy="7" r="2" fill="none" stroke="currentColor" strokeWidth="1.8" /><circle cx="10" cy="17" r="2" fill="none" stroke="currentColor" strokeWidth="1.8" /></svg>
+          </button>
           <button className="icon-btn" title="Fit to view" aria-label="Fit to view" onClick={() => viewer.current?.fit()}>
             <svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
           </button>
@@ -132,7 +135,7 @@ export function App() {
       <main className="stage">
         <Viewer ref={viewer} doc={doc} mode={mode} showSeams={showSeams} knit={knit} onPick={selectStitch} />
 
-        <aside className="float float-left">
+        <aside className={'float float-left' + (sheet ? ' open' : '')}>
           <section className="card">
             <h2><span className="h-ico">◍</span> Project</h2>
             <select className="soft-select" aria-label="Example pattern" value={example?.key ?? ''} onChange={(e) => loadExample(e.target.value)}>
