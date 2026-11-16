@@ -115,3 +115,61 @@ These are the cheapest fixes: spec wording, not new syntax.
    - a knit-together fold (`fold … join`).
 3. **Implement**, starting with sections, the `VERB N WHERE` form, and `hold`/`join`.
    - Those 3 features unlock most of the 85%+ translations, which can then be run through the checker.
+
+## Spec revision
+
+SYNTAX.md was revised after this trial. Cross-cutting rules are in its new "Semantics" section. Nothing below is implemented yet.
+
+### FAIL items
+
+| Item | Resolution |
+|---|---|
+| Charts: transcription effort | No image import. Typing is shorter: `chart NAME odd` (only odd rows drawn), run counts (`.5`), `stitch` labels `odd:`/`even:`/`1-4:`. The spec now says how repeats work across, up, when they don't fit, and under shaping. |
+| Missing stitches | Added `p3tog lli rli m1 m1p k2togtbl ssp`, any `cNf`/`cNb`, and `(…)in1` (trinity stitch). `lt`/`rt` are 2 stitches wide. |
+| Row tables per size group | `if size in … { … } else if … { … } else { … }`, with an example. No table form was added. `if` may also wrap top-level `chart`/`stitch`, so a panel can differ per group under one name. |
+| Fabric for new stitches | `inc … in FABRIC`, `cast_on … in FABRIC`. |
+| Shaping inset from an edge or marker | `inset I` after the places: `dec edges inset 3`, `dec markers inset 1`. |
+| Buttons | `buttons N on EDGE [at LEN …]`. `seam … using buttons` is now defined as an overlapping closure. |
+| Zipper length | `seam A = B using zipper LEN`. |
+| Pick-up rule inside `join` | `pick_up A per B from EDGE` is a join part; `(edge + edge)` in a part; a trailing `mult M` rounds the total. |
+| Knit-together fold | Piece statement `fold [at MARKER]`: one row that knits the live stitches together with the cast-on. |
+| Mid-piece cast-on method | `cast_on … using METHOD` (informational). |
+| Custom bind-off | `bind_off using "*bo4 m1 bo*"`, with the new written-row word `bo`. |
+| Two yarns in a plain round | A one-line colour chart (`M C`). Colour inside written rows was not added. |
+| Two gauges, needle changes (DN, WL) | Already covered. Clarified: a `gauge` may name a fabric declared later, and `needle` labels are free text. |
+| Turning the cowl WS out (SL) | No syntax: write the fabric as it looks from the finished outside. |
+| Blocking, stretched lengths, finishing notes | Still not covered. |
+
+### UNCLEAR items
+
+| Item | Resolution |
+|---|---|
+| Per-size lists and `${}` | Allowed wherever a number or length may stand; the positions are listed. Exceptions: `param` lines and chart bodies. `0` is a no-op. A list of the wrong length is an error. |
+| `match PIECE` | Added `match PIECE.MARKER` and `match PIECE[a:b]`, with an optional `from MARKER` on this piece. |
+| Garter in the round | A fabric is the RS look: garter alternates knit (row 1) and purl (row 2) rounds. "Next knit round" = `ending row 2`. |
+| First row after `fold`, `join`, `ws` cast-on | Start statements are not rows; row 1 is RS unless the start statement ends with `ws` (now also on `join` and `pick_up`). `flat` and `resume` restart at RS unless `ws`. A piece `fold` is one row. |
+| "Ending with row 2 or 4" | `ending row 2,4`. `ending` adds the fewest rows, and they are ordinary rows of the run (stripes keep running). |
+| `start`/`end`/`left`/`right`/`center` | Defined in the WHERE table for sections, rounds (`center` = halfway round; `edges` = either side of the round start) and split pieces (the outer edges of the whole row). |
+| Does `join` consume a round? | No. The first `row` after it is the joining round. |
+| Section names from join parts | From the source; `NAME:` on `cast_on`/`pick_up` parts; otherwise `p1`, `p2`, … by position. |
+| Fabric after `join` | Each live part keeps its fabric and its place in the repeat. New parts are `st`. Yarn and needle come from the first live part. |
+| Piece ending with held stitches only | Allowed. |
+| Several holds in one row | Applied in the order written (= the order worked). Counts refer to the stitches before the row. Places that touch merge into one run. |
+| `piece.left` across a split | Yes: `left`/`right` are the outer edges for the whole height. `neck.1`/`neck.2` name the two neck sides; `1` is the left side seen from the RS. |
+| Reworking held shoulders | `resume HOLDER` continues held stitches in the same piece. |
+| Shaping on the last row of an `until` run | Schedule `last`. With `until N sts`, the run ends right after the row that reaches N. |
+| `stitch` blocks | Unlabelled lines are rows 1…n; labels are all or none. As a fabric the rows cycle, so a 2-line stitch alternates. |
+| Written `k` on a WS row | Written rows are always as worked. |
+| Rib phase after another fabric | Naming the fabric in force continues it; a different fabric starts at its row 1, aligned to the right edge. Leave the fabric out to continue as established. |
+| `expect width` tolerance | Same thresholds as seams: 5% passes, 5–15% warns, more is an error. `within LEN\|P%` makes it strict. |
+| Width over mixed gauges | The sum of the parts, each at its own gauge. Row height comes from the fabric covering the most stitches. |
+| Lengths after a hem fold | Measured from the fold line after a piece `fold`; `from MARKER` otherwise. |
+| `place … at shoulders` fold line | The middle row, or the `fold` marker. |
+| Placement of joined pieces | Pieces linked by `join` or `pick_up` move together; place one of them. |
+| `${}` in a named yarn colour | Allowed: `${}` is replaced as text before parsing. |
+
+### Not changed
+
+- Start-of-round marker moved mid-piece (CA sleeves): only at a `join`, by splitting a part with a range.
+- Placed increases written as `inc N evenly`: use a written row for exact positions.
+- Long `fabric:count` lists (CR): after the first row, sticky per-part fabric makes later rows short. No panel macro was added.

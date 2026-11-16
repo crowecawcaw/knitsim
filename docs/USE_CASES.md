@@ -50,10 +50,14 @@ The checker also caught real errata in the published patterns:
 | ✅ | Measure from a marked row | "until armhole measures 7in" | SL BT BP | |
 | ✅ | Repeat a block | "repeat these 8 rows 3 more times" (written `repeat 4`) | all | |
 | ✅ | Match another piece's length | "work as for back until…" (counted in rows) | BT | |
+| 📝 | Match part of another piece | "same length as back to underarm", "same as upper left front" | BT CC SL | `rows until match back.underarm`, `match front[split:end]` |
+| 📝 | Shaping on the last row of a run | "inc 2 sts evenly across last rib row" | CC | `rows until 2.5in rib2x2 ending ws last inc 2 evenly` |
+| 📝 | Row tables per size group | "Sizes XS–M: rows 3–42 … Sizes L–2X: …" | CA TC | `if size in XS S M { … } else if size in L 1X { … } else { … }`, also around `chart`/`stitch` |
+| 📝 | Work the sides of a split one after the other | "leave rem sts on a holder; rejoin yarn and work to match" | BT CC SL | `hold … as left`, finish one side, `resume left` |
 | 📝 | Repeat until a stitch count is reached | "rep rnds 3–4 until 142 sts", "inc every 6th row to 44 sts" | LD BT CC | `repeat until 44 sts { … }`, `rows until 44 sts st every 6 inc edges` |
 | 📝 | Size-specific sections | "Sizes XS, XL and 2X only:" (written `repeat 1/0/0/1/…`) | LD WL CC CA | `if size in XS XL 2X { … }` |
 | 📝 | Mutually exclusive versions | shell vs tunic, long vs short sleeve (written `repeat ${cond?1:0}`) | DN CA | `if sleeve == "long" { … } else { … }` |
-| 📝 | End on a given side or row | "ending with a WS row", "ending with Round 8 of chart" | SL BT CC CA DN | `rows until 7in ending ws`, `… ending row 8` |
+| 📝 | End on a given side or row | "ending with a WS row", "ending with Round 8 of chart", "ending with row 2 or 4" | SL BT CC CA DN | `rows until 7in ending ws`, `… ending row 8`, `… ending row 2,4` |
 | 📝 | First row after cast-on is WS | "CO 16. Next row (WS): purl" | CA | `cast_on 16 ws` |
 | 📝 | AT THE SAME TIME (overlapping instructions) | "Read ahead! neck shaping begins while armhole shaping continues" | SL CA TC | `at_same_time { … } and { … }` |
 | 📝 | Name rows and reuse them | "Rows 19–24: repeat Rows 13–18" | CA | `define rowsA { … }` then `rowsA` |
@@ -72,14 +76,15 @@ The checker also caught real errata in the published patterns:
 | ✅ | Check stitch counts | "You should have 160 sts" | all | |
 | 📝 | Decrease or increase N evenly (irregular) | "decrease 22 sts evenly", "k7, k2tog, *k12, k2tog*…" | WL CA SL CC | `dec 22 evenly`, `inc 3 evenly`, or a written row `"k7 k2tog *k12 k2tog*"` |
 | 📝 | Asymmetric repeat in an inc/dec round | "K19, (M1, k39) 5 times, M1, k20" | WL | `row "k19 (m1l k39)x5 m1l k20"` or `inc 6 evenly` |
-| 📝 | One-sided shaping (fronts, necklines) | "K3, K2tog, knit to end", "knit to last 3, ssk, k1" | CC SL | `dec left`, `dec right`, `inc 2 right`; exact text as `row "k3 k2tog k"` |
+| 📝 | One-sided shaping (fronts, necklines) | "K3, K2tog, knit to end", "knit to last 3, ssk, k1" | CC SL | `dec left`, `dec right inset 3`, `inc 2 right`; exact text as `row "k3 k2tog k"` |
+| 📝 | Shaping set in from an edge or marker | "k3, k2tog", "ssk 2 sts before marker" | CC CR DN | `dec edges inset 3`, `dec markers inset 1` |
 | 📝 | Bind off or cast on at the start of rows | "bind off 4 sts at beg of next 2 rows", "cast on 25 sts at beg of next 2 rows" | SL BT CC BP | `rows 2 bind_off 4`, `rows 2 cast_on 25` |
 | 📝 | Stepped shoulders | "cast off 6 sts beg of next and following alt row" | BT CC | `rows 4 every 2 from row 1 bind_off 6` |
-| 📝 | Shaping at markers | "knit to marker, M1R, sm, k1, M1L", "k2tog, sm, ssk" ×4 | LD CR CA TC | `sections back:52 sleeve_l:8 …` then `inc markers`, `dec markers`, `inc front.edges back.edges` |
+| 📝 | Shaping at markers | "knit to marker, M1R, sm, k1, M1L", "k2tog, sm, ssk" ×4 | LD CR CA TC | `sections back:52 sleeve_l:8 …` then `inc markers inset 1`, `dec markers`, `inc front.edges back.edges` |
 | 📝 | Per-section counts in the round | "back 6, sleeve 8, front 11", "52 sts each front and back, 8 each sleeve" | LD CR CA | `expect back=52 sleeve_l=8 …` |
 | 📝 | Increase at the start of the round | "inc 1 st at beg of rnd" | WL | `inc start` |
 | 📝 | Centred double decrease at a marked stitch | "cdd at centre front" | CA | `dec 2 center using cdd`, `dec 2 front.center` |
-| 📝 | Increase or decrease type | M1R/M1L/M1PR, ssk vs k2tog, k2tog tbl, LLI/RLI | CR CA TC WL | `dec edges using ssk,k2tog`, `inc markers using m1r,m1l` |
+| 📝 | Increase or decrease type | M1R/M1L/M1PR, ssk vs k2tog, k2tog tbl, LLI/RLI | CR CA TC WL | `dec edges using ssk,k2tog`, `inc markers using rli,lli` |
 | 📝 | Slot or buttonhole: bind off, then cast on over the gap | "bind off centre 35 sts / cast on 35 sts", "cast off 2 … cast on 2 over cast-off sts" | BP CC | `row bind_off 35 center` then `row cast_on 35 center`; `buttonhole at 3` |
 | 📝 | Space buttonholes evenly | "bottom 4 rows up, top at last row, rem 3 spaced evenly" | CC | `rows until fits EDGE spaced 5 from row 4 buttonhole center`; across a row: `buttonhole 5 evenly` |
 
@@ -93,18 +98,19 @@ The checker also caught real errata in the published patterns:
 | 📝 | Place stitches on hold and resume them | "place sleeve sts on scrap yarn", "leave rem 30 sts on a holder" | LD CR WL DN BT CC CA TC | `hold all as neck`, `hold 18 center as fneck`; resume with `join body.neck` |
 | 📝 | Divide a round into body and sleeves | "place 32 sts on waste yarn, CO 12, k48; rep from *" | DN LD CA TC | `row hold sleeve_l cast_on underarm_l:12 hold sleeve_r cast_on underarm_r:12` |
 | 📝 | Join several pieces into one round | "Joining rnd: k40 sleeve sts, k77 body sts, …" | CR WL | `join sleeve_l.live + body.front + sleeve_r.live + body.back` |
-| 📝 | Cast on in the middle of a row | "cast on 2 sts under the arm" | LD DN CA TC | `hold S cast_on underarm:2`, `cast_on N center` |
-| 📝 | Mixed pick-up row | "pick up 21 down left front, k18 from holder, 21 up right, k30 from back" | BT CA | `join pick_up 21 from front.neck + front.fneck + pick_up 21 from ~front.neck + back.bneck` |
-| 📝 | Pick-up ratio rule | "pick up 2 sts for every 3 rows, then adjust to a multiple of 4" | SL | `pick_up 2 per 3 from … mult 4` |
+| 📝 | Cast on in the middle of a row | "cast on 2 sts under the arm" | LD DN CA TC | `hold S cast_on underarm:2`, `cast_on N center using backward_loop` |
+| 📝 | Hold stitches on both sides of a marker or of the round start | "place last 4 and first 4 sts on hold", "5 sts each side of marker" | WL CR | `hold 4 edges as ua`, `hold 5 back.end front.start as ua` |
+| 📝 | Mixed pick-up row | "pick up 21 down left front, k18 from holder, 21 up right, k30 from back" | BT CA | `join pick_up 21 from front.neck.1 + front.fneck + pick_up 21 from front.neck.2 + back.bneck` |
+| 📝 | Pick-up ratio rule | "pick up 2 sts for every 3 rows, then adjust to a multiple of 4" | SL | `pick_up 2 per 3 from … mult 4`; with held stitches: `join pick_up 2 per 3 from front.neck.1 + front.fneck + … mult 4` |
 | 📝 | Edge ranges on top or bottom edges | underarm cast-on segment, half the back neck | DN CA CC | `body.underarm_l` (named cast-on), `back.neck[start:mid]`, `body.bottom[front]` |
 | 📝 | Graft live stitches | "graft underarm sts with Kitchener st" | CR WL | `seam body.ua_l = sleeve_l.ua using graft` |
 | 📝 | Three-needle bind-off | "join shoulders with 3-needle BO" | SL | `seam … using 3needle` |
 | 📝 | Split a round into flat pieces | "turn and continue on these 80 sts only" | TC | `row hold back` then `flat`; the back is a new piece: `join body.back` |
 | 📝 | Band worked to fit | "work until band fits along front edge to marked row" | CC | `rows until fits front.right[start:neck]` |
 | 📝 | Intentional ease, gathers, pleats | gathered sleeve cap, "ease in fullness" | SL CC | `seam A = B gather` / `ease 4in` |
-| 📝 | Fold, facing and hem join | "fold at turning row and join to cast-on", folded collar | SL TC BT | `fold body at turning` + `seam body.bottom = body.row[hem_top]` |
+| 📝 | Fold, facing and hem join | "fold at turning row and join to cast-on", folded collar | SL TC BT | knitted in: piece statement `fold at turning`; sewn: `fold body at turning` + `seam body.bottom = body.row[hem_top]` |
 | 📝 | Provisional cast-on | "CO provisionally" | TC | `cast_on 80 using provisional` |
-| 📝 | Zipper or buttons | "sew in zipper", "sew buttons through both layers" | TC CC BP | `seam yoke.left = yoke.right using zipper`, `… using buttons` |
+| 📝 | Zipper or buttons | "sew in zipper", "sew buttons through both layers" | TC CC BP | `seam yoke.left = yoke.right using zipper 12/14/16in`, `… using buttons`, `buttons 2 on body.slot at 1.5in -1.5in` |
 | 📝 | Placement of new shapes | yoke or body tubes, two fronts side by side, a piece folded over the shoulders | LD CC BP | `place body at torso`, `at front_left`, `at shoulders`; joined pieces are placed automatically |
 
 ## Fabrics and colour
@@ -117,12 +123,12 @@ The checker also caught real errata in the published patterns:
 | 📝 | Stripe sequence that keeps running across shaping | 44-row stripe repeat through armhole and neck | CC TC | `stripes A:2 B:4 …` (sticky until `stripes off`) |
 | 📝 | Panel widths after shaping | fixed `fabric:count` goes stale once stitches change | CR | `sections` + `st checked:panel st` |
 | 📝 | Rib phase and symmetric ribs | "P2, *K2, P2*", "K3, *p2, k2* to last 5, p2, k3" | BT TC CC | written row as fabric: `rows 2in "k3 *p2 k2* p2 k3"` |
-| 📝 | Custom stitch patterns | Checked stitch, trinity stitch, twisted rib (k1 tbl) | CR SL CA | `stitch checked … end` |
-| 📝 | Charts: lace and cables | yo/p3tog lace, LT/RT twisted cables | DN CA | `chart A … end` with symbols and `key`; the checker verifies repeats |
+| 📝 | Custom stitch patterns | Checked stitch, trinity stitch, twisted rib (k1 tbl) | CR SL CA | `stitch checked … end`; trinity: `*(p1 k1 p1)in1 k3tog*` |
+| 📝 | Charts: lace and cables | yo/p3tog lace, LT/RT twisted cables | DN CA | `chart A odd … end` with symbols, `key` and run counts (`.5`); the checker verifies repeats |
 | 📝 | Charts that change stitch count | lace repeat grows 12 → 16 → 24; yoke chart with decreases | DN WL | chart rows padded with `x` (no stitch) |
 | 📝 | Work part of a chart | "Work Rounds 9 through 13 of Chart A" | DN | `rows chartA[9:13]` |
 | 📝 | Stranded colourwork | "*K1 MC, K1 CC*", 3-colour yoke chart | WL TC | colour chart: cells are yarn names; `key d = M k2tog` |
-| 📝 | Work new stitches in pattern | "working increased sts in St st" | CR | new stitches take the fabric of the section they land in (`fabric:SECTION`) |
+| 📝 | Work new stitches in pattern | "working increased sts in St st" | CR | new stitches take the fabric of the section they land in (`fabric:SECTION`), or another one: `inc markers inset 1 in st` |
 
 ## Gauge, tools and finishing
 
@@ -132,8 +138,8 @@ The checker also caught real errata in the published patterns:
 | 📝 | Gauge per fabric | "18 sts St st, 23 sts Checked" | CR WL | `gauge checked 23 sts x 25 rows = 4 in` |
 | 📝 | Needle changes | "change to larger needles" | all | `needle US7` + `gauge on US7 …` |
 | 📝 | Yarn held double, number of strands | | WL | `yarn A #… x2` |
-| 📝 | Bind-off method | "BO in rib", "*BO 4, m1, BO this st*" (picot) | WL DN | `bind_off using rib`, `bind_off using picot` |
-| 📝 | Finished measurements | "Finished bust 36in" | LD CC BP | `expect width 36in`, `expect length 24in within 0.5in` |
+| 📝 | Bind-off method | "BO in rib", "*BO 4, m1, BO this st*" (picot) | WL DN | `bind_off using rib`, `bind_off using "*bo4 m1 bo*"` |
+| 📝 | Finished measurements | "Finished bust 36in" | LD CC BP | `expect width 36in` (5% passes, as for seams), `expect length 24in within 0.5in` |
 | ❌ | Blocking or stretched measurements | "lengths given stretched 25%" | DN | `block stretch 25%` |
 | 📝 | Size labels containing `/` | "XS/S", "2/3XL" clash with per-size lists | BT CC | quoted options: `param size enum "XS/S" M "2/3XL"` |
 
@@ -150,8 +156,9 @@ The checker also caught real errata in the published patterns:
 6. **Not yet covered** by the v2 spec:
    - Blocking or stretched measurements ("lengths given stretched 25%"). Seen in DN.
    - Finishing notes with no effect on the stitches (weave in ends, block to shape). Seen in most patterns.
-   - Moving the start of the round, including a section that straddles it (underarm stitches centred on the round start). Seen in TC; counts stay right but the geometry is off by a few stitches.
-   - Working the two sides of a split one after the other, with the second side offset by a row. Seen in BT, CC and SL; the DSL works both sides on the same rows.
+   - Moving the start of the round in the middle of a piece. Seen in TC and CA. (A `join` can start the round mid-part with edge ranges, and `hold N edges` straddles the round start.)
+   - Turning a piece inside out ("turn cowl so WS faces out"). Seen in SL; write the fabric as it looks from the finished outside.
    - `like` with overrides ("work as for front hem, but to 5in"). Seen in TC; use `define` or retype it.
-   - Colour inside a written row ("*k1 MC, k1 CC*" has to be a 2-stitch colour chart). Seen in WL and TC.
+   - Colour inside a written row ("*k1 MC, k1 CC*" is the one-line colour chart `M C`). Seen in WL and TC.
+   - Importing charts from images. Charts are typed; `odd`, run counts and `stitch` rows keep that short. Seen in DN, WL and CA.
    - Buttonholes at computed positions on a body copied with `like` (the band must be its own piece). Seen in CC.
