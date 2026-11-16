@@ -3,8 +3,8 @@
 A plain-text language for knitting patterns. The app parses it, builds every stitch,
 checks counts and seams, and simulates the result in 3D.
 
-> **Status.** This is the v2 spec. The engine (`src/knit/core.ts`) implements **v1 only**. Everything tagged `(v2)` is
-> specified but not built yet; see [Implementation status](#implementation-status). Every v1 pattern is a valid v2 pattern.
+> **Status.** This is the v2 spec, and the engine (`src/knit/engine/`) implements it; see
+> [Implementation status](#implementation-status) for the approximations. Every v1 pattern is a valid v2 pattern.
 
 This file is the core reference. The rest of the v2 spec is in [docs/syntax](docs/syntax):
 
@@ -241,7 +241,7 @@ round
 | `match length …`, `match … +N\|-N` (v2) | `match length PIECE[a:b]` compares measured lengths, not rows ("same length as leg 1", when the fabrics differ). A trailing `-1` or `+2` adjusts by rows: "same as back less one row" = `match back -1` |
 | `worked [in SECTION]` (v2) | Short rows have reached every live stitch (of that section): no gap or unworked stitch is left ahead. "Repeat these 2 rows until all heel sts are worked" = `repeat until worked { … }` |
 | `N sts [in SECTION]` (v2) | The stitch count reaches N. Overshooting is an error |
-| `fits EDGE` (v2) | The piece is as long as that edge (bands) |
+| `fits EDGE [+ EDGE…]` (v2) | The piece is as long as that edge (bands). A second `fits` in the same piece measures from where the first ended, so a band can follow an edge in parts |
 | `width LEN` (v2) | The row is that wide (in the round: the circumference): "increase until it fits round the hand" |
 
 (v2) A length condition may end with `at WHERE` to measure up one stitch column: `rows until 6in from heel at instep.center`.
@@ -629,39 +629,20 @@ with a short-row heel, glove fingers (a pair), a stuffed toy and a mitered-squar
 
 ## Implementation status
 
-Implemented (v1): everything not tagged `(v2)`, with fabric and `N` written out in full (`row st inc edges 2`).
+The engine in `src/knit/engine/` reads the whole v2 spec, including [docs/syntax](docs/syntax): it builds the stitch
+graph, checks stitch counts, `expect`s, seams and pick-ups, and lays the pieces out for the 3D view. `core.ts` turns
+the result into meshes. These parts are approximations:
 
-Specified, not yet implemented (v2), including everything in [docs/syntax](docs/syntax):
-
-- **Rows:** sticky fabric; `until N sts`, `fits`, `width`, `from PIECE.MARKER`, `match PIECE.MARKER`/`PIECE[a:b]`;
-  `ending` (with `in SECTION`); `at WHERE` on lengths; `every`, `spaced` and `last` schedules.
-- **Shaping:** `VERB N WHERE` order; `start end left right markers evenly at`; `SECTION.where`, `each.where`; `inset`,
-  `using`, `as`; mid-piece `bind_off N`, `cast_on`, `hold` (in a row or alone), `buttonhole`.
-- **Sections:** `sections` (also `sections N`, a section that straddles the round start), `expect NAME=N`,
-  `fabric:SECTION`, `NAME_1`/`NAME_2` split names, point markers (`marker NAME WHERE`).
-- **Pieces:** `join` (as a start and in mid-piece, with `pick_up … per`, `mult`, ranges of live and held stitches,
-  `.below`/`.above`), `pick_up A per B`, `cast_on … using` (and the closed and provisional methods), `ws` on start
-  statements, `top_down`, `icord`, `round`/`flat`/`icord` statements, `round_start`, piece `fold`, `resume`, `close`,
-  `stuff`, `note`, `like … mirrored`/`until` with a body, pieces that end live or held.
-- **Flow:** `repeat until` (and `whole`), `if`/`else if`/`else` (also at the top level), `define` (with arguments),
-  `for`, `let`, `at_same_time`; `&& || ! in` in expressions.
-- **Written rows:** everything in [written-rows.md](docs/syntax/written-rows.md): the stitch words, `(…)inN`, `bo`/`co`,
-  crosses, fills, the stops `|` and `^`, `turn`/`wt`/`ds` (short rows), `slide`, `@YARN`, top-level `key`.
-- **Fabrics and colour:** `stitch`, `chart` (also `mosaic`), named and combined yarns, `stripes`, `needle`, per-fabric
-  gauge, `bind_off using "…"`, `finish`.
-- **Assembly:** `seam … using`/`ease`/`gather`, `zipper LEN`, `buttons`, `fold`, the v2 `place` spots, `gather`, `stuff`,
-  `trim`, `embroider`; `expect width|length` (with `at`, `of`, `unfinished`); named and ranged horizontal edges,
-  positions (lengths, offsets, negative numbers), points, `piece.row[…]`/`piece.col[…]` lines, `neck.1`/`neck.2`.
-- **Lexical:** quoted enum options, per-size lists and `${}` in every numeric position, verbatim chart bodies.
-- **Corpus 2, revision 2:** `cut`; `place … at SPOT SPOT [mirrored]`; `expect length … from P to Q`, `expect width … flat`;
-  `cast_on NAME:N …`; `sections NAME = A + B`, `sections off`; `shift N`; one-off `row "…"`; `pat`, `(…)?`, `|NAME`,
-  `WORD:NAME`, `:NAME` in written rows; size families (`enum group(…)`, `//`), per-size param defaults; top-level `if`
-  round header statements; the square default for garter gauge; the pick-up check; the `center` parity rule.
-- **Corpus 2, revision 3:** the `fabric` statement; `key … "text"` and `key NAME = A to B`; `gauge approx`; fractional
-  `xN` and `yarn NAME = A xN`; `expect … printed`; `match length`, `match … ±N`, `until worked`; `overN`, `psso`/`p2sso`,
-  `pfb`, `slN`, spaced `sl1 wyif`; `embroider path|daisy`; per-size `let` values in `${}`; `round_start at -N` semantics.
-- **Semantics:** the rules under [Semantics](#semantics-v2), including per-column row counts and layout from stitch
-  topology (both are engine work that short rows, mitres and toys depend on).
+- **Layout.** Pieces are laid out row by row. Side-edge lengths cancel each row's sideways drift, but layout from stitch
+  topology is not built, so short-row, mitred and toy shapes are approximate.
+- **3D placement.** The v2 `place` spots map onto a few body shapes (torso, arms, table). A pair uses its first spot.
+- **Measuring.** `expect length … from P to Q` is a straight line, and only within one piece.
+- **Charts.** When a one-cell decrease could either fill cells or swallow the cell beside it, the reading whose counts
+  carry on to the next row is chosen.
+- **Rounds.** `overN` and `round_start` only move the start of the round. `top_down` swaps the top and bottom edges.
+- **Bind-offs.** A bind-off at the end of a row is not mirrored to the other edge in the drawing.
+- **Neck edges.** `neck` needs a centre split. A neck held straight across with `hold … as neck` is taken as a
+  straight edge.
 
 ## Tips
 

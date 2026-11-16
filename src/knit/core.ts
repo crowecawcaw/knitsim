@@ -2,6 +2,10 @@
 // TODO: type this module incrementally.
 // ===== Knit DSL core: parser → stitch graph → checks → meshes → cloth sim =====
 
+import { buildDoc } from './engine/build';
+import { assemble } from './engine/assemble';
+import { edgeOf as engineEdgeOf } from './engine/edges';
+
 // ---------- Tokenizing into statements ----------
 function splitStatements(src) {
   // returns flat list of {line, toks} with '{' and '}' as their own statements
@@ -748,6 +752,10 @@ function placePiece(P, mesh, at, built, neckRef) {
       const span = 300 * Math.PI / 180, Wd = (hi - lo + 1) / built.sg, R = Wd / span, rc = (lo + hi) / 2 / built.sg;
       const th = (x - rc) / R;
       w = [0, 1, 2].map(q => S[q] + d[q] * along + R * (nrm[q] * Math.cos(th) + a[q] * Math.sin(th)));
+    } else if (at === 'torso') { // a tube around the body, hanging from the shoulders
+      const circ = mesh.W / built.sg; const R = Math.max(circ / (2 * Math.PI), 6.5) + 0.5;
+      const phi = -Math.PI / 2 + 2 * Math.PI * (mesh.us ? mesh.us[k] : (x - mesh.x0 / built.sg) / circ);
+      w = [R * Math.sin(phi), topY - Hin + y, R * Math.cos(phi) * 0.75];
     } else if (at === 'neck' || at === 'head') { // rings: cylinder, x around, rows up
       const circ = mesh.W / built.sg; const R = circ / (2 * Math.PI);
       const phi = -Math.PI / 2 + 2 * Math.PI * (mesh.us ? mesh.us[k] : (x - mesh.x0 / built.sg) / circ);
@@ -811,14 +819,17 @@ function samplePath(segs, t) {
   }
 }
 
+// v2 spots, roughly: tubes around the torso, fronts on the front, hands on the arms, the rest on the table
+const SPOT_MAP = { front_left: 'front', front_right: 'front', shoulders: 'front', left_hand: 'left_arm', right_hand: 'right_arm', left_foot: 'table', right_foot: 'table', waist: 'torso', left_leg: 'table', right_leg: 'table', crotch: 'table' };
+
 // ---------- Cloth simulation ----------
 function makeSim(doc) {
   const built = doc.built; const parts = [];
   let N = 0;
   built.order.forEach(P => {
-    const at = doc.placed[P.name]; if (!at || !P.nrows) return;
-    const mesh = buildMesh(built, P);
-    const pos0 = placePiece(P, mesh, at, built);
+    const at = SPOT_MAP[doc.placed[P.name]] || doc.placed[P.name]; if (!at || !P.nrows) return;
+    const mesh = buildMesh(pv(built, P), P);
+    const pos0 = placePiece(P, mesh, at, pv(built, P));
     parts.push({ P, mesh, offset: N, pos0, at }); N += mesh.local.length;
   });
   const partOf = {}; parts.forEach(p => partOf[p.P.name] = p);
@@ -849,7 +860,7 @@ function makeSim(doc) {
     if (!p.P.gather) return;
     let vs;
     if (p.mesh.band) { const m = p.mesh; vs = []; for (let i = 0; i <= m.nx; i++) vs.push(m.ny * (m.nx + 1) + i + p.offset); }
-    else { const pts = edgeOf(built, `${p.P.name}.top`)[0].pts; vs = [...new Set(pts.map(q => nearestVert(p.mesh, q) + p.offset))]; }
+    else { const pts = engineEdgeOf(built, `${p.P.name}.top`)[0].pts; vs = [...new Set(pts.map(q => nearestVert(p.mesh, q) + p.offset))]; }
     gathers.push(Int32Array.from(vs));
   });
   const S = new Int32Array(seamPairs); const ST = new Float32Array(pairStage);
@@ -962,14 +973,14 @@ function makeSim(doc) {
 }
 
 function run(src, overrides) {
-  const perrs = [];
-  const pp = applyParams(src, overrides || {}, perrs);
-  const doc = parse(pp.src);
-  doc.params = pp.params; doc.expanded = pp.src; doc.errors.push(...perrs);
-  build(doc);
-  check(doc);
+  const doc = buildDoc(src, overrides || {});
+  try { assemble(doc, doc.G); } catch (e) { doc.errors.push({ line: 0, msg: 'Internal error: ' + e.message, level: 'error' }); console.error(e); }
+  delete doc.G;
+  const seen = new Set(); doc.errors = doc.errors.filter((e) => { const k = `${e.line}|${e.level}|${e.msg}`; if (seen.has(k)) return false; seen.add(k); return true; });
   doc.errors.sort((a, b) => (a.line || 0) - (b.line || 0));
   return doc;
 }
+// each piece has its own gauge: mesh and placement read it from a per-piece view of `built`
+const pv = (built, P) => ({ ...built, sg: P.sg, rg: P.rg });
 
-export { applyParams, evalExpr, parse, build, check, run, edgeOf, edgeLen, buildMesh, makeSim, BODY, TABLE, fabricDesc };
+export { applyParams, evalExpr, parse, build, check, run, engineEdgeOf as edgeOf, edgeLen, buildMesh, makeSim, BODY, TABLE, fabricDesc };
