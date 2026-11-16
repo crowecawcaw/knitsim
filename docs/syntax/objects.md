@@ -36,7 +36,7 @@ end
 ```
 
 As a statement, `icord` switches mode in mid-piece, like `round` and `flat` ("work 1 row as an I-cord, then divide onto
-3 needles" = `icord ; row ; round`). Cords merge into a round with an ordinary `join toe1.live + toe2.live + toe3.live`.
+3 needles" = `icord ; row ; round`). That first row is an ordinary row: it is worked, counted and measured. Cords merge into a round with an ordinary `join toe1.live + toe2.live + toe3.live`.
 
 ## Lines and points on the fabric
 
@@ -57,7 +57,11 @@ Stitch positions on row R count along that row as it was worked, from the right 
 What lines and points are for:
 
 - **Pick up on the surface.** `pick_up 2 from body.row[12][5:7]`, `pick_up 60 from pair.row[ridge]`. `~` reverses the
-  direction, as for edges.
+  direction, as for edges. The new piece stands out from the surface. Its RS faces the side that is on the left when
+  you travel along the line: for a row line taken in the direction it was knitted, the RS faces the cast-on (the piece
+  was held the right way up); with `~` it faces the top ("turn the body upside down", "with the back of the body
+  toward you"). For a column line taken upwards the RS faces the piece's left (RS view). Along an edge there is no
+  such choice: the new piece's RS is the source's RS.
 - **Sew a part on.** `seam ear.bottom = head.row[40][10:18]`. A seam to a point sews a small closed edge (the end of a
   cord or tube) on there: `seam tail.bottom = body.row[6][18]`.
 - **Tack.** A seam between two points pulls them together: `seam head.row[30][4] = head.row[33][4]` (a pinched mouth,
@@ -121,7 +125,7 @@ that the pattern gives only in a photo are the translator's estimate; say so in 
 
 | Statement | Meaning |
 |---|---|
-| `stuff [firm\|light\|none]` | Piece statement: fill the part of this piece knitted since the previous `stuff` (or the start). Write it where the pattern says "stuff now", before the opening gets small |
+| `stuff [firm\|light\|none]` | Piece statement: fill the part of this piece knitted since the previous `stuff` (or the start). Write it where the pattern says "stuff now", before the opening gets small. Bare `stuff` is the default: the piece is filled to its knitted shape without stretching the stitches. `firm` stretches the fabric a little (rounder, about 10% wider); `light` leaves it soft and partly flat; `none` leaves this part empty |
 | `stuff PIECE [firm\|light]` | In `assemble`: fill a sewn piece. Seams run in order, so sew, stuff, then sew the gap |
 
 ```knit
@@ -141,7 +145,7 @@ All three go in `assemble` and never change a stitch count.
 | Statement | Meaning |
 |---|---|
 | `trim KIND [SIZE] at PLACE…` | Something that isn't knitted, fixed at each PLACE (a point, an edge, a line or a whole piece). KIND is any word. The simulator draws `pompom tassel fringe eye bead cord elastic wire`; the rest are listed as notions |
-| `embroider KIND\|CHART at PLACE… [yarn NAME]` | Stitches sewn over the fabric. KIND is `straight` (along a line), `knot` (at a point) or `duplicate`. A colour `chart` is duplicate-stitched with the first stitch of its row 1 at the point |
+| `embroider KIND\|CHART at PLACE… [yarn NAME]` | Stitches sewn over the fabric. KIND is `straight` (one stitch along each line), `knot` (at each point), `duplicate` (over each stitch of a line), `daisy` (a lazy-daisy loop along each line, anchored at its end) or `path` (one thread through all the points in order). Any other KIND is drawn as `straight` and listed by name. A colour `chart` is duplicate-stitched with the first stitch of its row 1 at the point |
 | `note "text"` | Anywhere: an instruction with no effect on the stitches ("weave in ends", "try on", "twist the yarns at the edge"). It is kept with the row or step it follows |
 
 ```knit
@@ -150,7 +154,12 @@ trim eye 9mm at head.row[30][12] head.row[30][20]
 trim elastic 0.5in at skirt.row[casing]
 trim fringe 4in at shawl.bottom
 embroider heart at hat.row[brim][10] yarn C
+embroider path at body.row[13][8] body.row[12][9] body.row[13][10] body.row[12][11] body.row[13][12] yarn fine   # a mouth: two Vs side by side
 ```
+
+A `path` is the generic form: a V is three points, a whisker two, a curved smile several. Points may be given with
+length offsets (`body.row[13][mid-0.25in]`). **Split yarn** ("use half the plies") is a yarn of its own in the header,
+`yarn fine = CC1 x0.5`; it is drawn thinner and has no effect on gauge unless a `gauge` line names its needle.
 
 Ties are seams that are knotted, not sewn: `seam strap_l.top = strap_r.top using tie`.
 

@@ -186,7 +186,7 @@ Surface lines and points (`body.row[R][P]`) are in [objects.md](objects.md#lines
 
 ```knit
 yarn fur #d9a066 ; yarn pants #3d6274 ; yarn K #222222
-gauge 24 sts x 32 rows = 4 in
+gauge approx 24 sts x 32 rows = 4 in             # "gauge is not important": sizes are reported, not enforced
 
 piece leg_l round
   cast_on 3 ; row "*kfb*" ; rows 4 st            # ends live

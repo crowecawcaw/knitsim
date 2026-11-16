@@ -329,6 +329,22 @@ in [docs/syntax](syntax) and not implemented.
 | 📝 | Fold direction | "fold the brim inwards" vs "folded up" | OMB BRI | `fold hat at brim out` |
 | 📝 | Instructions with no effect on stitches | "weave in ends", "try on and adjust", "twist the two strands at the edge" | most | `note "…"` |
 
+### Added in spec revision 3
+
+| | Use case | Example phrase | Seen in | Proposed |
+|---|---|---|---|---|
+| 📝 | The pattern's own multi-stitch abbreviation | "KYOK: sl3, pass 1st over 2, k1, yo, k1" | GOA | `key kyok = (k1 yo k1)in3 "…"`; counts only: `key wrap3 = 3 to 3 "…"` |
+| 📝 | Start a pattern inside short rows | "work EOP between the markers" on a heel that has only been short-rowed | PAL | `fabric eop` or `fabric eop:hc` (no row is worked), then `pat` |
+| 📝 | A cable that crosses the round start | "use the 1st st of rnd 17 to cross your last cable" | GOA | `overN` as the last word of the round; the next round is N shorter |
+| 📝 | Embroidered shapes | "a mouth of two Vs side by side"; lazy daisy | KKT | `embroider path at P P P P P yarn fine`; `embroider daisy at LINE` |
+| 📝 | Split yarn | "split the yarn to half its thickness" | KKT | `yarn fine = CC1 x0.5` |
+| 📝 | Gauge that doesn't matter | "gauge is not important; knit tightly" | KKT | `gauge approx 38 sts x 46 rows = 4 in`: size checks are reports only |
+| 📝 | Printed counts that are wrong | "29 sts" where the rows give 28 | GOA NBP | `expect 29 printed "heel setup"`: reported as an erratum |
+| 📝 | Pass a stitch over | "k2, pass the first st over the second" | KKT | `"k2 psso"`; also `p2sso`, `pfb`, `slN`, `sl1 wyif` |
+| 📝 | Same length as another part | "work leg 2 to the same length as leg 1"; "same as back less one row" | PAL JAN | `rows until match length pair[leg1:leg1e] from leg2`; `match back -1` |
+| 📝 | Short rows until every stitch is used | "repeat until all sts on needle 1 are worked" | GOA | `repeat until worked in back { … }` |
+| 📝 | A per-size value in an expression | toe starts 1.6 (2, 2.2)in before the foot length | GOA | `let toe = 1.6/2/2.2` ; `${foot - toe}in` |
+
 ### Still not covered (corpus 2)
 
 | | Use case | Example phrase | Seen in | Workaround |
@@ -336,9 +352,7 @@ in [docs/syntax](syntax) and not implemented.
 | ❌ | Knit a second piece's live stitches into this row | "purl together 1 st from ruffle needle with 1 st from pants needle" | JAN | bind the ruffle off and `seam` it to `pants.row[M]`. (`fold` covers only a piece's own cast-on) |
 | ❌ | A knitted-in casing left partly open | "k each st together with CO to last 10 sts" | BLC | `fold at turning` + `note`; the elastic is a `trim` |
 | ❌ | Stop when a yarn runs out | "continue until you run out of yarn A" | DAS ALY | a length or count param |
-| ❌ | A cable that crosses the round start | "use the 1st st of rnd 17 to cross your last cable" | GOA | `round_start at 1` before the round and `round_start at -1` after it |
 | 📝 | Chart columns per size | "size M: start with the 3rd st and end with st 7" | GOA | `leaf shift 0/2/0` (revision 2) |
 | ❌ | Two-layer (double-knit) fabric in the simulation | "*k1, sl1 wyif*" gives a double-thick band | EFH | a `stitch` with `sl1wyif` and its own `gauge`; drawn as one layer |
 | ❌ | Curved attachment lines | "ears are sewn along a slight C-curve" | ELY | a straight `row` line |
 | ❌ | A part pushed into the body or threaded through holes | "pull the tail partway in"; "pass the leg through two yo holes" | SDL | `seam` the cord to a point + `note` |
-| ❌ | A length relative to another, less a row | "same length as back less one row" | JAN | `match`, then adjust by hand |

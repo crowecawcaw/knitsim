@@ -348,3 +348,57 @@ HARD:
 
 Not changed: cable phase that depends on knitted length; hip and leg circumference with no stated location; positions
 given only in figures; "same reps as leg 1" (still `match PIECE[a:b]`, which counts rows); steeks (a cut up a column).
+
+## Corpus 2 — round 2 test and spec revision 3
+
+Three patterns were test-translated by Haiku with the revision-2 spec: Palindrome again, and two new ones. This was
+the last round; the spec was revised once more.
+
+| Pattern | Done | Main issues |
+|---|---|---|
+| PAL socks (retest) | 80% → 90% | Solved since round 1: unravelling (`cut … to … as`), two placements, per-size rib phase (`shift`), LLI/RLI ownership, `slp1`. FAIL: no way to put the heel centre in EOP before the short rows, so `pat` read it as `st`. Still unclear: order of the resolve round; `shift` on a section part. "Same length as leg 1" counted rows. |
+| GOA Gothic Arches socks (new) | 85% | FAIL: KYOK (3 in, 3 out) left as an unknown word, so every row with it miscounted. Cable crossing the round start; `round_start at -1`; printed counts that are wrong; "until all sts are worked"; per-size values inside `${}`; `pfb`; `sl1 wyif`. |
+| KKT Kate's Kitten (new) | 95% | FAIL: a mouth of two Vs; yarn split to half thickness. "Gauge not important"; psso; I-cord first round; facing of surface pick-ups; default `stuff`; `like` with its own start. |
+
+### Resolutions
+
+FAIL:
+
+- Section fabric without a row (PAL) → the statement `fabric FABRIC…` sets the fabric in force and works nothing: `fabric eop`, `fabric eop:hc`. A fabric with no section runs across the markers.
+- User-defined multi-stitch operations (GOA) → no new form: `key NAME = STITCHES ["text"]` with an `(…)inN` body (`key kyok = (k1 yo k1)in3`), now documented as the place for every pattern abbreviation; plus `key NAME = A to B "text"` for counts only. An unknown word in a row is an error.
+- V / lazy-daisy embroidery (KKT) → `embroider path at P P P …` (one thread through the points) and `embroider daisy`; any other KIND is drawn as `straight`.
+- Split yarn (KKT) → fractional strands: `yarn fine = CC1 x0.5`. Drawn thinner; no effect on gauge.
+
+HARD:
+
+- Cable crossing the round start → `overN` ends a round N stitches late; the next round is N shorter; the start does not move.
+- Loose gauge → `gauge approx …`: size mismatches are reports only; counts are checked as usual.
+- psso → `psso`, `p2sso` (pass the stitch before the last over it). Also `pfb`, `slN`.
+- `sl1 wyif`/`wyib` → already `sl1wyif`/`sl1wyib`; the spaced spelling is accepted, and `sl1` is defined as yarn on the WS.
+- Per-size lists inside `${}` → a `let` name holding a list is the current size's value in an expression.
+- "Same length as" → `match length PIECE[a:b]` compares lengths; `match … ±N` adjusts by rows ("less one row").
+- Pattern errata → `expect … printed ["text"]`: reported as an erratum beside the computed value, not an error.
+
+UNCLEAR:
+
+- Resolve order after a short-row heel → one rule with or without `join`: the first unturned row runs from the needle to the end of the round, the next round closes the rest; a different printed order is the same round. KDS/PDS are plain `k`/`p`.
+- `round_start at -1` → forward moves work the stitches passed; backward moves work nothing, and the next round is N shorter. Fabrics and sections stay on their stitches.
+- `shift` with a section part → after the part: `rib1x1:ia shift 1/0`, that part only.
+- Increases on both sides of `|` → in a written row every stitch belongs to the segment it is written in; this overrides the worked-into rule.
+- "Until all sts are worked" → the condition `worked [in SECTION]`; `(k1)?` for a last pass with nothing left.
+- I-cord first round → an ordinary row: worked, counted, measured.
+- `like` with another start → start statement, then the copied rows, then the body.
+- `~` and facing of pick-ups → RS of the source always faces; on a surface line the new piece's RS faces the left of the direction of travel (the cast-on for a row line; the top with `~`).
+- Default `stuff` → filled to the knitted shape without stretching; `firm` about 10% wider, `light` soft.
+- One-off `row` and per-section state → a one-off stands in for one pattern row of the stitches it works and sets no fabric, also as one part of a row.
+
+### Remaining open
+
+- Face and feature positions given only in photos; which sock of a cut pair is the left one (translator's estimate, `note`).
+- A gap that has an extent ("sew the gap between the legs closed"): still a single-point tack or a `col` line chosen by hand.
+- Edge stitches beside a chart that differ per size inside one section (GOA foot): needs extra sections.
+- Rejoining rounds where the pattern redistributes stitches while decreasing (GOA after the heel): written per size in `if`.
+- "Without breaking the yarn" between pieces (yarn continuity) is a `note`.
+- Cable phase that depends on knitted length; curved attachment lines; a second piece's live stitches knitted into a row;
+  a casing left partly open; "until the yarn runs out"; double-knit drawn as two layers; steeks.
+- None of revision 3 is implemented; `overN`, `until worked` and `fabric` have not been tested by a translator.

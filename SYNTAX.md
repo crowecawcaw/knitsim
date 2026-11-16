@@ -58,11 +58,13 @@ end
 | `source URL` | Link to the original pattern |
 | `gauge S sts x R rows = N in\|cm` | Stitches and rows per N inches or cm |
 | `gauge [FABRIC] [on NEEDLE] S sts x R rows = N in\|cm` (v2) | Gauge for one fabric and/or needle. The most specific match wins. FABRIC is a built-in fabric or a `stitch`/`chart` name (it may be declared later); NEEDLE is any label used by a `needle` statement. With no `gauge garter` line, garter is taken as square (one ridge is as tall as one stitch is wide: twice as many rows as stitches per inch) and the checker says so |
+| `gauge approx S sts x R rows = N in\|cm` (v2) | "Gauge is not important" (toys), or a gauge the translator estimated. Sizes are still computed from it, but a size mismatch (`expect width\|length`, seams, pick-ups) is only reported, never a warning or an error. Stitch counts are checked as usual |
 | `yarn #rrggbb` | Default yarn colour. Inside a piece it changes the colour from that point on |
-| `yarn NAME #rrggbb [x2] ["Label"]` (v2) | Named yarn; `xN` = strands held together. The first one declared is the default. Inside a piece, `yarn NAME` switches |
-| `yarn NAME = A+B ["Label"]` (v2) | Two or more named yarns held together |
+| `yarn NAME #rrggbb [xN] ["Label"]` (v2) | Named yarn; `xN` = strands held together (`x2`). The first one declared is the default. Inside a piece, `yarn NAME` switches |
+| `yarn NAME = A+B ["Label"]`, `yarn NAME = A xN` (v2) | Two or more named yarns held together; or yarn A with N strands. A fraction is a split yarn: `yarn fine = CC1 x0.5` = "split CC1 to half its thickness" |
 | `finish felt\|block [width P%] [length P%]` (v2) | Felting or blocking changes the finished size; see [objects.md](docs/syntax/objects.md#finishing-felting-and-blocking) |
-| `key NAME = STITCHES` (v2) | A custom stitch word for written rows: `key star = (k1 yo k1 yo k1)in5` |
+| `key NAME = STITCHES ["text"]` (v2) | The pattern's own abbreviation, as a word for written rows, `stitch` bodies and charts: `key star = (k1 yo k1 yo k1)in5`, `key kyok = (k1 yo k1)in3 "sl3, pass 1st over 2, k1 yo k1"`. Its counts are those of STITCHES |
+| `key NAME = A to B "text"` (v2) | A stitch the words can't spell: it uses A stitches and leaves B, and is drawn as B plain stitches |
 | `let NAME = VALUE` (v2) | A named value for `${NAME}`; see [Flow control](#flow-control-v2) |
 
 ## Parameters
@@ -82,7 +84,8 @@ Syntax: `param NAME TYPE [OPTIONS | MIN..MAX] = DEFAULT ["Label"]`.
   The operators are `+ - * / %`, the comparisons `== != < <= > >=` and `cond ? a : b`. The functions are
   `round ceil floor min max abs even odd mult(x, m)` and `pick(i, a, b, …)` (the i-th value, counting from 0). The variable `size_index`
   is also available, so `${pick(size_index, 30, 34, 38) * 2}` is a per-size value inside an expression.
-  (v2) adds `&& || !` and `x in A B C`.
+  (v2) adds `&& || !` and `x in A B C`. (v2) A `let` name that holds a per-size list is the current size's value
+  inside `${}`: `let toe = 1.6/2/2.2`, then `rows until ${foot - toe}in from heel`.
 - **Per-size lists:** `a/b/c` picks the value for the current size. The size comes from the `size` param, or from the
   first `enum` if there is no `size`. The list must have one value per option: `cast_on 50/54/58`, `rows until 2.5/2.5/3in rib2x2`, `garter:4/6/6 st garter:4/6/6`.
   - A list is numbers only, joined by `/` with no spaces. Inside `${}`, `/` is always division.
@@ -124,8 +127,9 @@ stay with the part that contains them. The cut ends are live stitches, `A.top` a
   that lands at the end of a row moves to the start of the next row, as written patterns do. A round piece is reflected
   across the start of the round (the second mitten or sock).
 - `until MARKER` copies OTHER only up to that marker ("work as for back to armhole").
-- Body statements continue after the copied rows. A start statement in the body replaces OTHER's, whatever its kind
-  (a `join` may replace a `cast_on`).
+- A start statement in the body replaces OTHER's, whatever its kind (a `join` may replace a `cast_on`). The order is
+  always: the start statement, every row copied from OTHER, then the rest of the body. Yarn changes are copied too;
+  "without breaking the yarn" is a `note`.
 
 ### Start statements
 
@@ -195,6 +199,7 @@ round
 | `rows 2in [FABRIC]` | Work enough rows to add that length |
 | `rows until COND [FABRIC] [SHAPING…]` | Work until a condition holds (rounds up) |
 | `rows NAME` / `rows NAME[a:b]` (v2) | Work every row, or rows a to b, of a `stitch` or `chart` once, starting at row 1 (or a) |
+| `fabric FABRIC…` (v2) | Set the fabric in force **without working a row**. It takes what `row` takes: `fabric eop` (the whole needle), `fabric eop:hc` (one section; the others keep theirs), `fabric garter:3 st garter:3`. The next `row`, or `pat` in a written row, starts it at its row 1. Use it before short rows that begin "in pattern" |
 | `repeat N { … }` | Repeat a block |
 | `marker NAME` | Name the current **row** so edges and lengths can refer to it. `start` and `end` always exist |
 | `marker NAME WHERE` (v2) | Name one **stitch** of the current row (a removable marker): `marker cb back.center`, `marker nose start`. `piece.NAME` is that point; in ranges it also stands for its row and its stitch column. The current row is the row just worked (before the first row: the cast-on). WHERE is read on that row as worked, so after a WS row `start` is its left end (RS view); use `left`/`right` for a fixed side. To mark a point inside a written row, use [`:NAME`](docs/syntax/written-rows.md#names-in-a-row) |
@@ -202,12 +207,13 @@ round
 | `sections NAME = A + B …`, `sections off` (v2) | "Remove marker": merge neighbouring sections into one, or drop every boundary. Each stitch keeps its fabric |
 | `expect N [N …]` | Assert the live stitch count. After a split, give one number per section |
 | `expect NAME=N …` (v2) | Assert the count of named sections or holders |
+| `expect … printed ["text"]` (v2) | Any `expect` whose number is the pattern's own and is known to be wrong (errata). The checker reports the computed value beside the printed one as an erratum and goes on; if they agree after all, it says so |
 | `expect width\|length LEN [within LEN\|P%]` (v2) | Assert a finished measurement at this row. In the round, width is the circumference; add `flat` for the tube laid flat (half of it): `expect width 3in flat` = "3in across the palm". Default: the seam thresholds (within 5% passes, 5–15% is a warning, more is an error); with `within`, anything outside is an error. See [Measuring](#measuring) |
 | `expect length LEN at WHERE` (v2) | The length up one stitch column, when rows differ across the width (short rows): `expect length 13in at back.center` |
 | `expect length LEN of EDGE` (v2) | The length of any edge or line, also in `assemble`: `of sleeve.row[upperarm]`, `of body.row[chest][front]`, `of (shawl.left + shawl.right)` |
 | `yarn NAME`, `stripes …`, `needle NAME` (v2) | See [Colour](#colour-v2) |
 | `round` / `flat [ws]` / `icord` (v2) | Switch mode mid-piece: "join to work in the round", "work back and forth". The row after `flat` is RS; `flat ws` = "turn" first |
-| `round_start WHERE` (v2) | Move the start of the round to one place: `round_start sole.center`, `round_start at 16`, `round_start at -1` (one stitch back). The stitches up to the new start are worked as established and are not a row. A section that now straddles the start keeps its name |
+| `round_start WHERE` (v2) | Move the start of the round to one place: `round_start sole.center`, `round_start at 16`, `round_start at -1`. Forward (`at N`, or a place ahead): the stitches up to the new start are worked as established and are not a row ("remove m, k1, pm"). Back (`at -N`): nothing is worked; the last N stitches just worked count as the first N of the next round, so that one round is N stitches shorter ("stop 1 st before the end of the round; this is the new start"). Fabrics and sections stay on their stitches: no pattern shifts, and a section that now straddles the start keeps its name. For one cross that reaches over the round start, see [`overN`](docs/syntax/written-rows.md#across-the-round-start) |
 | `join PART + …` (v2) | Rebuild the needle in mid-piece; see [Start statements](#start-statements) |
 | `hold …` (v2) | As a statement of its own, [`hold`](#shaping) moves stitches to a holder without working a row |
 | `fold [at MARKER]` (v2) | One row that folds the piece along MARKER (default: halfway) and knits each live stitch together with the cast-on edge: a knitted-in hem or doubled collar. The live count must equal the cast-on count. The fold line is MARKER's row, and the `fold` row is the row being worked. Later lengths are measured from the fold line |
@@ -215,7 +221,7 @@ round
 | `bind_off [using METHOD]` | Bind off all live stitches, forming the top edge. (v2) METHOD is informational (`rib`, `picot`, `stretchy`, …; the default is in pattern), or a written row of `bo`: `bind_off using "*bo4 m1 bo*"` |
 | `gather` | Thread yarn through the live stitches and pull tight (hat crowns) |
 | `close [A B] [using graft\|3needle]` (v2) | Fold the live stitches in half and join the halves: sock toes, mitten and square hat tops; see [objects.md](docs/syntax/objects.md#closed-starts-and-ends) |
-| `stuff [firm\|light\|none]` (v2) | Stuff what has been knitted since the last `stuff`; see [objects.md](docs/syntax/objects.md#stuffing) |
+| `stuff [firm\|light\|none]` (v2) | Stuff what has been knitted since the last `stuff`. Bare `stuff` fills the shape without stretching the stitches; see [objects.md](docs/syntax/objects.md#stuffing) |
 | `note "text"` (v2) | An instruction with no effect on the stitches. Allowed anywhere |
 
 (v2) A piece may end with live stitches, or with held stitches only (`hold all`). Both stay available to `join` and to
@@ -232,6 +238,8 @@ round
 | `9in from PIECE.MARKER` (v2) | Measured back through a `join` or `pick_up` into the source piece: `until 12in from yoke.start` |
 | `match PIECE` | Same row count as another piece |
 | `match PIECE.MARKER`, `match PIECE[a:b]` (v2) | Same row count as PIECE from its start to MARKER, or between its markers a and b: "same length as back to underarm" = `match back.underarm`. Add `from MARKER` to count this piece's rows from a marker instead of its start. Compared as lengths when the row gauges differ |
+| `match length …`, `match … +N\|-N` (v2) | `match length PIECE[a:b]` compares measured lengths, not rows ("same length as leg 1", when the fabrics differ). A trailing `-1` or `+2` adjusts by rows: "same as back less one row" = `match back -1` |
+| `worked [in SECTION]` (v2) | Short rows have reached every live stitch (of that section): no gap or unworked stitch is left ahead. "Repeat these 2 rows until all heel sts are worked" = `repeat until worked { … }` |
 | `N sts [in SECTION]` (v2) | The stitch count reaches N. Overshooting is an error |
 | `fits EDGE` (v2) | The piece is as long as that edge (bands) |
 | `width LEN` (v2) | The row is that wide (in the round: the circumference): "increase until it fits round the hand" |
@@ -285,12 +293,14 @@ fills the remaining stitches. (v2) A part may name a section instead of a count:
 
 (v2) **`shift N`** after a fabric (or a fabric part) starts its across-repeat N stitches in: `rib1x1 shift 1` = "p1, k1
 rib", `rib2x2 shift 2` = "p2, k2 rib", `leaf shift 2` = "start the chart with its 3rd stitch". N may be a per-size
-list: `rib1x1 shift 1/0/1/0/1/0`. The shift stays with the fabric while it is in force.
+list: `rib1x1 shift 1/0/1/0/1/0`. The shift stays with the fabric while it is in force. In a row of parts it follows its
+part, after the count or section, and applies to that part only: `row rib1x1:ia shift 1/0 st:arr rib1x1:ib`.
 
 (v2) **Fabric is sticky.** A `row`/`rows` with no fabric continues the previous one ("work in pattern as established"),
 including its place in a multi-row repeat. New stitches take the fabric of the part or section they land in, unless the
 shaping says `in FABRIC`. A single written row (`row "…"`) is a **one-off**: it does not change the fabric in force, so
-`rows 4 garter ; row "k27 sk2p k27" ; row` goes on in garter. A piece that has named no fabric yet is in `st`.
+`rows 4 garter ; row "k27 sk2p k27" ; row` goes on in garter. It stands in for one pattern row of the stitches it works
+(their repeat moves on a row), also as one part of a row: in `row "k2 ssk k":back lace:front` only `lace` is set. A piece that has named no fabric yet is in `st`.
 Details are under [Sticky state](#sticky-state).
 
 (v2) Because a fabric is the RS look, the engine works whatever produces it: `st` is knit every round in the round and
@@ -312,6 +322,9 @@ A quoted row is read as worked, the way the pattern prints it. The full referenc
 - `WORD:NAME` names the stitches a word makes or removes (`co3:nose`, `bo8:slot`, `k12:lid`) as `piece.NAME`, and a
   bare `:NAME` marks the point reached (`"k12 :eye_l wt"`).
 - `turn` ends a row early (short rows) and `^` is the gap an earlier turn left: `"sl1 k ^-1 ssk k1 turn"`.
+- `overN` ends a round N stitches past the round start, for a cable that borrows the first stitch of the next round.
+- `psso` passes the stitch before the last one over it (`sl1 k2tog psso`, `k2 psso`). A pattern's own abbreviation is
+  a [`key`](#header): `key kyok = (k1 yo k1)in3`. Never leave an unknown word in a row.
 - `slide` ends a row without turning (brioche passes). `@YARN` changes yarn inside a row.
 - A written row is always as worked: on a WS row `k` shows as a purl on the RS. The checker verifies that the row uses
   exactly the live stitches. A rib that starts with purls is a written row: `"*p2 k2*"`.
@@ -348,6 +361,8 @@ sections back:52 sleeve_l:8 front:52 sleeve_r:8     # "pm" between them; one cou
   section. A stitch made between two stitches (`m1`, `yo`, `co`) at a boundary belongs to the section worked last,
   unless a `|` is written before it. With shaping verbs, `inc markers` gives one stitch to each side of the boundary. A
   decrease that takes stitches from both sides of a boundary (a `cdd` on the marker) leaves its stitch in the later section.
+  In a written row with `|`, the `|` is where the marker sits and overrides all of this: every stitch belongs to the
+  segment it is written in, on both sides (`"k lli | pat | rli k"` grows the two outer sections).
 - **Needles are sections.** Counts per needle (magic-loop halves, DPNs: "23 sts on the front needle, 21 on the back")
   are `sections front:23 back:21` and `expect front=23 back=21`. Moving stitches between needles is a new `sections` line.
 - `sections NAME = A + B` merges neighbouring sections ("remove the marker"); `sections off` removes them all.
@@ -477,7 +492,7 @@ Each `seam` statement is sewn in the order it is written.
 | `gather EDGE\|LINE [to LEN\|P%]` | Draw an edge or line together: close a cast-on hole, cinch a waist |
 | `stuff PIECE [firm\|light]` | Stuff a sewn piece. Seams, stuffing and trims happen in the order written |
 | `trim KIND [SIZE] at PLACE…` | Pompoms, tassels, fringe, safety eyes, elastic, cords: `trim pompom 3in at hat.top` |
-| `embroider KIND\|CHART at PLACE… [yarn NAME]` | Embroidery and duplicate stitch over finished fabric |
+| `embroider KIND\|CHART at PLACE… [yarn NAME]` | Embroidery and duplicate stitch over finished fabric. KIND is `straight`, `knot`, `duplicate`, `daisy` or `path` (one line through the points in order: a V, a mouth, a whisker); see [objects.md](docs/syntax/objects.md#trims-embroidery-and-notes) |
 | `fold PIECE at MARKER [out]` | Fold along a row after knitting (hem facing, doubled collar). The fold goes to the WS, or with `out` to the RS (a turned-up brim). Sew it down with an ordinary `seam`, or leave it loose (turned-back collar or cuff). A hem joined while knitting is the piece statement `fold` |
 
 ### Edges
@@ -488,7 +503,9 @@ piece.top         piece.top.1        piece.neck
 ```
 
 - `a`, `b` can be `start`, `end`, a marker name or a row number. A reversed range runs backwards.
-- `~EDGE` reverses an edge, and `+` joins edges: `back.neck + front.neck`.
+- `~EDGE` reverses an edge, and `+` joins edges: `back.neck + front.neck`. A pick-up is always made with the RS of the
+  source facing; `~` changes its direction, and on a surface line also which way the new piece faces
+  ([objects.md](docs/syntax/objects.md#lines-and-points-on-the-fabric)).
 - `left`/`right` are as seen from the right side, so the front's left edge meets the back's right edge.
 - `top.N` is the Nth section of a split top. For example, after a neckline the shoulders are `top.1` (left, from the
   RS) and `top.2`.
@@ -548,7 +565,9 @@ Rules that apply across statements.
   round.
 - In the round, the first row after short rows that doesn't end in `turn` starts at the last turn and runs on to the
   end of the round. It closes the gaps it crosses; the next round, worked from the round start in section order,
-  closes the rest. After a mid-piece `join` the round starts at the first part listed.
+  closes the rest. After a mid-piece `join` the round starts at the first part listed. If the needle then stands inside
+  that part (a heel that ended on a turn), the same rule holds: the first row runs from the needle to the end of the
+  round (the rest of the heel, then the instep) and the next round, from the first part, closes the other gaps.
 
 ### Rows and columns
 
@@ -573,6 +592,7 @@ Short rows, a moved round start and mid-piece joins make rows that don't cover e
   one-off and replaces nothing; `rows N "…"` makes the written row the fabric.
 - **Phase.** Naming the fabric already in force continues it. A different fabric starts at its row 1, aligned to the
   right edge (RS view) or the start of the round of the part it fills. To carry on "as established", leave the fabric out.
+  A fabric given with no count or section runs across section boundaries without restarting at each marker.
 - `rows NAME` always starts at row 1 of NAME, and NAME then stays in force after its last row.
 - Built-in fabrics are defined by their RS look, so they have no RS/WS phase to lose: `st` after a written row, or in a
   `mirrored` copy, is still knit on the RS. `mirrored` never changes which rows are RS.
@@ -600,6 +620,7 @@ Short rows, a moved round start and mid-piece joins make rows that don't cover e
 - A fabric with no gauge of its own uses the base gauge, except garter, which is taken as square (rows per inch = 2 ×
   stitches per inch). Declare `gauge garter …` when the pattern gives one.
 - With a `finish` line, `expect` checks the felted or blocked size; lengths inside pieces stay as knitted.
+- Under `gauge approx` every size check is a report only. A stuffed piece is measured unstuffed (laid flat).
 
 ## Worked examples (v2)
 
@@ -636,6 +657,9 @@ Specified, not yet implemented (v2), including everything in [docs/syntax](docs/
   `cast_on NAME:N …`; `sections NAME = A + B`, `sections off`; `shift N`; one-off `row "…"`; `pat`, `(…)?`, `|NAME`,
   `WORD:NAME`, `:NAME` in written rows; size families (`enum group(…)`, `//`), per-size param defaults; top-level `if`
   round header statements; the square default for garter gauge; the pick-up check; the `center` parity rule.
+- **Corpus 2, revision 3:** the `fabric` statement; `key … "text"` and `key NAME = A to B`; `gauge approx`; fractional
+  `xN` and `yarn NAME = A xN`; `expect … printed`; `match length`, `match … ±N`, `until worked`; `overN`, `psso`/`p2sso`,
+  `pfb`, `slN`, spaced `sl1 wyif`; `embroider path|daisy`; per-size `let` values in `${}`; `round_start at -N` semantics.
 - **Semantics:** the rules under [Semantics](#semantics-v2), including per-column row counts and layout from stitch
   topology (both are engine work that short rows, mitres and toys depend on).
 
@@ -648,6 +672,8 @@ Specified, not yet implemented (v2), including everything in [docs/syntax](docs/
 - Use `note "…"` for instructions the language has no statement for. Don't invent syntax. Hand shaping ("push the nose
   back into the muzzle"), positions given only in a photo, and try-on advice are notes; a tack (`seam POINT = POINT`)
   is the nearest statement when the shape matters.
-- When the pattern's own counts don't add up, translate the rows as printed, keep the `expect` with the printed number
-  and add a `note`. The checker's error then is the erratum report.
+- When the pattern's own counts don't add up, translate the rows as printed and keep the printed number as
+  `expect N printed "what the pattern says"`. The checker then reports an erratum, not an error.
+- An abbreviation the stitch table lacks (KYOK, a nupp, a wrapped cluster) is a `key`, built from `(…)inN` or given
+  as `A to B` counts. Every word in a row must be known, or the counts after it are wrong.
 - Magic loop and DPNs change nothing: "turn the work" to the other needle is not a `turn`, and the needles are sections.
