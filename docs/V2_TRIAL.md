@@ -237,3 +237,52 @@ Round-1 tags (103):
    - graft pairing;
    - finishing and blocking.
 8. **Charts are expensive.** Transcribing the DN and WL charts from images took about 55 tool calls. The errors included a row offset, misread symbols, and columns off by one, all caught only by pixel checks and row-balance arithmetic. The syntax is fine. The cost is input, and that argues for chart tooling: an in-app chart editor, or image-assisted entry with row-balance validation.
+
+## Corpus 2 revision (round 1 of 3)
+
+The corpus was widened to 37 non-sweater patterns: hats, mittens, gloves, socks, skirts, shorts, tops, shawls,
+blankets, bags and toys (see [USE_CASES.md](USE_CASES.md#corpus-2-other-objects)). They were read and judged against
+the spec; no translations have been run yet. The spec was then revised and split: SYNTAX.md is the core reference, and
+written rows, charts, 3D objects and the worked examples moved to [docs/syntax](syntax).
+
+A few general mechanisms carry most of the new use cases:
+
+- **Row ends and stops in written rows.** `turn` (short rows), `slide` (two-pass rows), and the stops `|` (marker) and
+  `^` (the gap of an earlier turn). Rows no longer have to cover every stitch, so each stitch column keeps its own row
+  count.
+- **Positions.** One grammar for range ends and points (`start mid end`, ±N stitches, lengths, markers, offsets), used
+  on edges, on held and live stitches, and on lines drawn on the fabric (`piece.row[R][a:b]`, `piece.col[P][a:b]`).
+  Partial holders, afterthought openings, surface pick-ups, tacks, trims and embroidery all use it.
+- **`join` in mid-piece**, `hold` without a row, and `round_start`.
+- **`for`, `define` with arguments and `let`** for modular pieces, templates and a second size axis.
+- **Closing and filling:** closed cast-on methods, `close`, `gather EDGE`, `icord`, `stuff`, `trim`, `embroider`, `finish`.
+
+### How the Round-2 themes were resolved
+
+| Round-2 theme | Resolution |
+|---|---|
+| 1. Rows with several shaping places | Marker tokens in written rows: `"*k1 m1l k m1r k1 \|*"` reads like the pattern, with a fill per section. `each.where` shapes the same place in every section. A `using` pair alternates over explicit places. `SECTION.start`/`.end` are as worked, like `start`/`end`. `m1pl`/`m1pr` were already there. |
+| 2. Start of the round | `round_start WHERE` moves it (`sole.center`, `at 16`, `at -1`), and a section may straddle it. A chart part can start mid-chart: `st leaf[25:32]:48 st`. Per-size chart columns still need one chart per size group. |
+| 3. Phase | A rib that starts with purls is a written row (`"*p2 k2*"`). Built-in fabrics are defined by their RS look, so `st` has no phase to restart, and `mirrored` never changes which rows are RS. The fold line is the marker's row. Open: rounds worked WS-out (an assembly `fold … out` shows the WS of a cuff, nothing more). |
+| 4. Held stitches and edges | `expect NAME=N` checks holders. Named cast-on and bind-off edges survive a new `sections` line (the item round 2 made worse). Markers belong to the piece, so split halves can use them in ranges. After `resume`, `from MARKER` counts on the columns being worked. Point markers (`marker NAME WHERE`) and positions name stretches of any edge, which covers the sleeve cap. |
+| 5. `repeat until` granularity | `repeat until COND whole { … }` checks only after each full pass of the block. Without `whole` it still stops after any row. |
+| 6. Partial measurements | `expect length LEN of EDGE` measures any edge or row line (`of sleeve.row[upperarm]`, `of body.row[chest][front]`), and `at WHERE` measures up one column (yoke depth at the centre back). |
+| 7. Small vocabulary gaps | Added `p2togtbl`, `sk2p`, `kfbf`, `yo2`, `k1b`, `sl1wyif`/`sl1wyib`, seam methods `backstitch` and `tie`, `fold … out`, `note "…"` for finishing text and `finish block\|felt` for blocked sizes. Graft pairing of one tube is `close A B`. Not changed: a slipped edge on WS rows only (write the rows), needle labels per section. |
+| 8. Charts are expensive | No syntax change; it is still a tooling problem. `chart … mosaic` halves the typing for slip-stitch colour, and `stitch` lines may now use every written-row feature. |
+
+### Proposals not taken
+
+- `short_rows … step … pairs …` and `@gap`/`@ds` targets: `turn` plus `^-N` in a `repeat` says the same.
+- `afterthought`, `cut`, `pin`, `tack`, `cinch`, `attach`, `eyes`, `tassel`, `elastic`, `drawstring`, `insert`, `roll`:
+  covered by row lines with `.below`/`.above`, point markers, seams to points, `gather LINE` and `trim KIND`.
+- `before_markers`/`after_markers`, `row each "…"`: `each.start`/`each.end` and `|` inside a repeat.
+- `group`, `piece NAME x4`, `edge NAME = EDGE` aliases, a second list separator for two size families: `for` and `let`.
+- `shape mitre`, `center_out`, `place … rotate`, a `double` fabric, `chart … wrap`, chart column ranges: left to the
+  engine or to existing syntax.
+- A knitted-in join of two pieces (`row attach other.live`), a casing left open, "until the yarn runs out": seen once
+  each; listed as open in USE_CASES.md.
+
+### Engine work this implies
+
+Short rows, mitres, toys and centre-out shapes all need two things the v1 engine doesn't have: a row count per stitch
+column, and a layout computed from how stitches connect, not one rectangle per piece.
