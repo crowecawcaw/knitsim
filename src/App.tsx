@@ -10,7 +10,9 @@ import { Inspector } from './components/Inspector';
 import { Viewer, type ViewerHandle } from './components/Viewer';
 import { KnitControls } from './components/KnitControls';
 import { curRowIndex } from './draw/stitches';
-import { isStacked } from './layout';
+import { isStacked, STACKED_QUERY } from './layout';
+import { Card } from './components/Card';
+import { loadPref, savePref } from './prefs';
 
 function useDebounced<T>(value: T, ms: number): T {
   const [v, setV] = useState(value);
@@ -64,10 +66,24 @@ export function App() {
     progress: st.piece === curPiece ? progress : doc.built.pieces[st.piece].total,
   }), [doc, curPiece, progress]);
   const clearStitch = () => setRaw((r) => ({ ...r, selected: null }));
-  // on small screens the project cards are a sheet over the knit; one sheet at a time
-  const [sheet, setSheet] = useState(false);
+  // the project cards can be hidden. On wide screens they start shown (unless hidden last time);
+  // on small screens they are a sheet over the knit, one sheet at a time
+  const panelDefault = () => !isStacked() && loadPref('panel') !== 'hidden';
+  const [sheet, setSheet] = useState(panelDefault);
+  useEffect(() => {
+    const mq = window.matchMedia(STACKED_QUERY);
+    const on = () => setSheet(panelDefault());
+    mq.addEventListener('change', on); return () => mq.removeEventListener('change', on);
+  }, []);
   useEffect(() => { if (selected && isStacked()) setSheet(false); }, [selected]);
-  const toggleSheet = () => { if (!sheet && isStacked()) clearStitch(); setSheet(!sheet); };
+  const toggleSheet = () => {
+    if (isStacked()) { if (!sheet) clearStitch(); }
+    else savePref('panel', sheet ? 'hidden' : 'shown');
+    setSheet(!sheet);
+  };
+  // the player can shrink to a small pill
+  const [dockMini, setDockMini] = useState(() => loadPref('dock') === 'mini');
+  const toggleDock = () => { savePref('dock', dockMini ? 'full' : 'mini'); setDockMini(!dockMini); };
 
   // the source drawer holds everything technical: the DSL and the checks
   const drawerOpen = tab !== 'sim';
@@ -114,7 +130,7 @@ export function App() {
           ))}
         </div>
         <div className="top-actions">
-          <button className={'icon-btn stacked-only' + (sheet ? ' on' : '')} title="Project and pieces" aria-label="Project and pieces" aria-expanded={sheet} onClick={toggleSheet}>
+          <button className={'icon-btn' + (sheet ? ' on' : '')} title={sheet ? 'Hide project and pieces' : 'Show project and pieces'} aria-label="Project and pieces" aria-expanded={sheet} onClick={toggleSheet}>
             <svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /><circle cx="16" cy="7" r="2" fill="none" stroke="currentColor" strokeWidth="1.8" /><circle cx="10" cy="17" r="2" fill="none" stroke="currentColor" strokeWidth="1.8" /></svg>
           </button>
           <button className="icon-btn" title="Fit to view" aria-label="Fit to view" onClick={() => viewer.current?.fit()}>
@@ -133,11 +149,10 @@ export function App() {
       </header>
 
       <main className="stage">
-        <Viewer ref={viewer} doc={doc} mode={mode} showSeams={showSeams} knit={knit} onPick={selectStitch} />
+        <Viewer ref={viewer} doc={doc} mode={mode} showSeams={showSeams} knit={knit} onPick={selectStitch} panelOpen={sheet} dockMini={dockMini} />
 
         <aside className={'float float-left' + (sheet ? ' open' : '')}>
-          <section className="card">
-            <h2><span className="h-ico">◍</span> Project</h2>
+          <Card id="project" icon="◍" title="Project">
             <select className="soft-select" aria-label="Example pattern" value={example?.key ?? ''} onChange={(e) => loadExample(e.target.value)}>
               {!example && <option value="">{doc.name || 'Custom pattern'}</option>}
               {EXAMPLES.map((e) => <option key={e.key} value={e.key}>{e.label}</option>)}
@@ -153,10 +168,9 @@ export function App() {
                 />
               </>
             )}
-          </section>
+          </Card>
           {names.length > 0 && (
-            <section className="card">
-              <h2><span className="h-ico">▦</span> Pieces</h2>
+            <Card id="pieces" icon="▦" title="Pieces">
               <div className="chips">
                 {names.map((n) => <button key={n} className={'chip' + (n === curPiece ? ' on' : '')} onClick={() => selectPiece(n)}>{n.replace(/_/g, ' ')}</button>)}
               </div>
@@ -166,7 +180,7 @@ export function App() {
                   <span className="track" /> Show seams
                 </label>
               )}
-            </section>
+            </Card>
           )}
         </aside>
 
@@ -176,8 +190,8 @@ export function App() {
           </aside>
         )}
 
-        <div className="dock">
-          <KnitControls piece={piece} progress={progress} setProgress={setProgress} onInspect={selectStitch} />
+        <div className={'dock' + (dockMini ? ' mini' : '')}>
+          <KnitControls piece={piece} progress={progress} setProgress={setProgress} onInspect={selectStitch} mini={dockMini} onToggleMini={toggleDock} />
         </div>
       </main>
 

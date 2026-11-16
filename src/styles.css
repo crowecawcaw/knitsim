@@ -38,7 +38,6 @@ a { color: var(--acc); }
 .top-actions .icon-btn { background: var(--card); box-shadow: 0 1px 2px rgba(0,0,0,0.06), 0 4px 12px -6px rgba(0,0,0,0.18); }
 .top-actions .icon-btn:hover { background: var(--card-solid); }
 .top-actions .icon-btn.on { background: var(--acc-soft); color: #5b43a6; }
-.stacked-only { display: none !important; }
 .brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
 .logo-mark { color: var(--terra); }
 .brand h1 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.02em; line-height: 1; }
@@ -71,6 +70,14 @@ a { color: var(--acc); }
 .card h2 { margin: 0 0 12px; font-size: 18px; font-weight: 800; display: flex; align-items: center; gap: 9px; text-transform: capitalize; }
 .card h3 { margin: 16px 0 8px; font-size: 13px; font-weight: 700; color: var(--mut); text-transform: uppercase; letter-spacing: 0.06em; }
 .h-ico { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; background: var(--acc-soft); color: var(--acc); font-size: 15px; }
+.card-toggle { appearance: none; border: 0; background: none; padding: 0; margin: 0; font: inherit; color: inherit; display: flex; align-items: center; gap: 9px; width: 100%; cursor: pointer; text-align: left; text-transform: inherit; }
+.card-toggle .chev { margin-left: auto; color: var(--mut); transition: transform .15s; }
+.card-toggle:hover .chev { color: var(--ink); }
+.card-toggle:focus-visible { outline: 2px solid var(--acc-ring); outline-offset: 4px; border-radius: 8px; }
+.card.folded { padding-bottom: 18px; }
+.card.folded h2 { margin-bottom: 0; }
+.card.folded .chev { transform: rotate(-90deg); }
+.float-left:not(.open) { display: none; }
 .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .card-head h2 { margin-bottom: 10px; }
 
@@ -118,6 +125,11 @@ a { color: var(--acc); }
 
 /* bottom dock player */
 .dock { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); width: min(720px, calc(100% - 36px)); z-index: 3; }
+.dock.mini { width: auto; }
+.player.mini { padding: 8px 10px 8px 8px; gap: 10px; }
+.player.mini .play { width: 42px; height: 42px; }
+.player.mini .scrub { width: 200px; margin: 0; }
+.steppers .collapse { margin-left: 2px; color: var(--mut); }
 .player { display: flex; align-items: center; gap: 16px; padding: 14px 20px 14px 14px; border-radius: 999px; }
 .play { appearance: none; border: 0; width: 54px; height: 54px; flex: none; border-radius: 50%; background: var(--card-solid); color: var(--ink); display: grid; place-items: center; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.08), 0 6px 14px -4px rgba(0,0,0,0.2); }
 .play:hover { transform: scale(1.04); }
@@ -171,15 +183,16 @@ pre.ref { font: 12px/1.5 "IBM Plex Mono", monospace; white-space: pre-wrap; back
 
 /* ---------- narrow screens: knit full screen, cards open as a sheet ---------- */
 @media (max-width: 860px) {
-  .stacked-only { display: inline-grid !important; }
   .topbar { padding: 10px 12px; gap: 8px; }
   .brand { padding: 4px 10px 4px 4px; }
   .brand p { display: none; }
   .pill-seg { order: 3; width: 100%; }
   .pill-seg button { flex: 1; padding: 8px 6px; }
   .dock { left: 12px; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); transform: none; width: auto; }
+  .dock.mini { left: auto; }
+  .player.mini { border-radius: 999px; }
+  .player.mini .scrub { width: min(200px, 44vw); }
   .float { left: 12px; right: 12px; top: auto; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 104px); width: auto; max-height: calc(100dvh - 250px); padding: 0; border-radius: var(--r); }
-  .float-left:not(.open) { display: none; }
   .float.open { box-shadow: 0 -10px 40px -18px rgba(0,0,0,0.35); }
   .player { border-radius: var(--r); padding: 12px 14px; gap: 12px; }
   .play { width: 46px; height: 46px; }
@@ -222,7 +235,6 @@ pre.ref { font: 12px/1.5 "IBM Plex Mono", monospace; white-space: pre-wrap; back
 }
 /* phone in landscape: one-line header, cards open as a side panel */
 @media (max-width: 960px) and (max-height: 500px) and (orientation: landscape) {
-  .stacked-only { display: inline-grid !important; }
   .topbar { flex-wrap: nowrap; padding: 6px 12px; gap: 10px; }
   .brand p { display: none; }
   .brand h1 { font-size: 20px; }
@@ -233,7 +245,6 @@ pre.ref { font: 12px/1.5 "IBM Plex Mono", monospace; white-space: pre-wrap; back
   .float { top: 58px; bottom: 86px; left: auto; right: auto; width: 300px; max-height: none; padding: 0; }
   .float-left { left: 12px; }
   .float-right { right: 12px; left: auto; }
-  .float-left:not(.open) { display: none; }
   .player { border-radius: 20px; padding: 8px 12px; }
   .play { width: 42px; height: 42px; }
   #simStatus { display: none; }

@@ -380,7 +380,7 @@ export class KnitScene {
   private updateStatus() {
     const s = this.sim; const el = this.statusEl; if (!s) return;
     if (this.mode === 'pieces') { el.textContent = `${s.parts.length} piece${s.parts.length > 1 ? 's' : ''} on a 1″ grid · drag to pan, scroll to zoom, tap a stitch`; return; }
-    if (this.mode === 'aligned') { el.textContent = `Pieces lined up where they'll be sewn · drag to orbit`; return; }
+    if (this.mode === 'aligned') { el.textContent = `Pieces lined up where they'll be sewn · drag to orbit, two fingers to pan`; return; }
     const T = this.simT; let txt: string;
     if (!this.simRunning && this.posAssembled) txt = 'Drag the fabric to tug it · drag around it to orbit';
     else {
@@ -474,10 +474,28 @@ export class KnitScene {
     let last2: { d: number; ang: number; mid: [number, number] } | null = null, moved = 0, downAt: [number, number] | null = null;
     let hoverT = 0;
     const worldPerPx = () => (2 * this.cam.dist * Math.tan((this.cam.fov * Math.PI) / 360)) / el.clientHeight;
+    const camR = new THREE.Vector3(), camU = new THREE.Vector3();
     const pan = (dx: number, dy: number) => {
-      const k = worldPerPx(), th = this.cam.theta;
-      this.cam.target.x -= (Math.cos(th) * dx + Math.sin(th) * dy) * k;
-      this.cam.target.z -= (-Math.sin(th) * dx + Math.cos(th) * dy) * k;
+      const k = worldPerPx();
+      if (this.mode === 'pieces') {
+        // on the mat: slide across the table
+        const th = this.cam.theta;
+        this.cam.target.x -= (Math.cos(th) * dx + Math.sin(th) * dy) * k;
+        this.cam.target.z -= (-Math.sin(th) * dx + Math.cos(th) * dy) * k;
+      } else {
+        // around the form: slide in the screen plane
+        camR.setFromMatrixColumn(this.camera.matrixWorld, 0); camU.setFromMatrixColumn(this.camera.matrixWorld, 1);
+        this.cam.target.addScaledVector(camR, -dx * k).addScaledVector(camU, dy * k);
+      }
+    };
+    // trackpads send a stream of small wheel events for a two-finger drag (and ctrl+wheel for a pinch);
+    // mouse wheels send big notches. Once a stream looks like a trackpad, keep treating it as one.
+    let padUntil = 0;
+    const isPad = (e: WheelEvent) => {
+      const now = performance.now();
+      if (e.deltaMode === 0 && (e.deltaX !== 0 || !Number.isInteger(e.deltaY) || Math.abs(e.deltaY) < 16)) padUntil = now + 400;
+      else if (e.deltaMode !== 0 || Math.abs(e.deltaY) >= 50) padUntil = 0;
+      return now < padUntil;
     };
     const zoom = (f: number) => { const lim = this.mode === 'pieces' ? [6, 900] : [15, 260]; this.cam.dist = Math.min(lim[1], Math.max(lim[0], this.cam.dist * f)); };
     const ray = (cx: number, cy: number) => {
@@ -533,10 +551,9 @@ export class KnitScene {
         const mid: [number, number] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
         if (last2) {
           zoom(last2.d / d);
-          if (this.mode === 'pieces') {
-            let da = ang - last2.ang; da = Math.atan2(Math.sin(da), Math.cos(da)); this.cam.theta -= da;
-            pan(mid[0] - last2.mid[0], mid[1] - last2.mid[1]);
-          }
+          if (this.mode === 'pieces') { let da = ang - last2.ang; da = Math.atan2(Math.sin(da), Math.cos(da)); this.cam.theta -= da; }
+          // two fingers dragging together pan, in every view
+          pan(mid[0] - last2.mid[0], mid[1] - last2.mid[1]);
         }
         last2 = { d, ang, mid };
       }
@@ -549,10 +566,10 @@ export class KnitScene {
     const cancel = (e: PointerEvent) => { pts.delete(e.pointerId); last2 = null; };
     const wheel = (e: WheelEvent) => {
       e.preventDefault(); this.camTween = null;
-      const pieces = this.mode === 'pieces';
-      if (e.ctrlKey || !pieces || (Math.abs(e.deltaY) > Math.abs(e.deltaX) * 2 && !e.shiftKey && e.deltaMode !== 0)) zoom(1 + e.deltaY * (e.ctrlKey ? 0.01 : 0.0012));
-      else if (Math.abs(e.deltaX) > 0.5 || e.shiftKey) pan(-e.deltaX, -e.deltaY);
-      else zoom(1 + e.deltaY * 0.0012);
+      const pad = isPad(e);
+      if (e.ctrlKey) zoom(1 + e.deltaY * 0.01); // pinch on a trackpad
+      else if (pad || e.shiftKey) pan(-e.deltaX, -e.deltaY); // two-finger drag on a trackpad
+      else zoom(1 + e.deltaY * 0.0012); // mouse wheel
     };
     el.addEventListener('pointerdown', down); el.addEventListener('pointermove', move);
     el.addEventListener('pointerup', up); el.addEventListener('pointercancel', cancel);

@@ -12,10 +12,14 @@ interface Props {
   showSeams: boolean;
   knit: KnitState;
   onPick: (st: Stitch) => void;
+  /** the project cards are showing on the left */
+  panelOpen: boolean;
+  /** the player is shrunk to a small pill */
+  dockMini: boolean;
 }
 
 /** Hosts the imperative three.js scene and forwards React state into it. */
-export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer({ doc, mode, showSeams, knit, onPick }, ref) {
+export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer({ doc, mode, showSeams, knit, onPick, panelOpen, dockMini }, ref) {
   const host = useRef<HTMLDivElement>(null);
   const status = useRef<HTMLDivElement>(null);
   const scene = useRef<KnitScene | null>(null);
@@ -26,16 +30,23 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer({ doc, mod
     const s = new KnitScene(host.current!, status.current!, { onPick: (st) => onPickRef.current(st) });
     s.mode = mode; // initial mode from the URL, no transition
     scene.current = s;
-    // the view fills the window; keep the knit clear of the header, cards and dock floating over it
+    return () => { s.dispose(); scene.current = null; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // the view fills the window; keep the knit clear of the header, cards and dock floating over it
+  useEffect(() => {
+    const s = scene.current; if (!s) return;
     const mq = window.matchMedia(STACKED_QUERY);
     const insets = () => {
       const landscape = mq.matches && window.innerHeight < window.innerWidth;
-      s.setInsets(!mq.matches ? { l: 330, r: 0, t: 80, b: 130 } : landscape ? { l: 0, r: 0, t: 56, b: 110 } : { l: 0, r: 0, t: 120, b: 130 });
+      if (!mq.matches) s.setInsets({ l: panelOpen ? 330 : 0, r: 0, t: 80, b: dockMini ? 90 : 130 });
+      else if (landscape) s.setInsets({ l: 0, r: 0, t: 56, b: dockMini ? 70 : 110 });
+      else s.setInsets({ l: 0, r: 0, t: 120, b: dockMini ? 90 : 130 });
     };
     insets(); mq.addEventListener('change', insets); window.addEventListener('resize', insets);
-    return () => { mq.removeEventListener('change', insets); window.removeEventListener('resize', insets); s.dispose(); scene.current = null; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    return () => { mq.removeEventListener('change', insets); window.removeEventListener('resize', insets); };
+  }, [panelOpen, dockMini]);
 
   // order matters: knit state first so the rebuilt textures include it
   useEffect(() => { scene.current?.setKnitState(knit); }, [knit]);

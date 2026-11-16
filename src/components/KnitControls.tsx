@@ -7,10 +7,16 @@ interface Props {
   progress: number;
   setProgress: (p: number) => void;
   onInspect: (st: Stitch) => void;
+  /** shrunk to a pill: just play and the scrubber */
+  mini: boolean;
+  onToggleMini: () => void;
 }
 
+const CHEV_DOWN = <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+const CHEV_UP = <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 15l6-6 6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+
 /** Scrubber, step/play buttons and the "what's next" row description. */
-export function KnitControls({ piece: P, progress, setProgress, onInspect }: Props) {
+export function KnitControls({ piece: P, progress, setProgress, onInspect, mini, onToggleMini }: Props) {
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(8);
   const live = useRef({ progress, speed, P });
@@ -48,13 +54,23 @@ export function KnitControls({ piece: P, progress, setProgress, onInspect }: Pro
   };
 
   const pct = total ? (prog / total) * 100 : 0;
+  const scrub = (
+    <input type="range" id="scrub" className="scrub" min={0} max={total} value={prog} aria-label="Knitting progress"
+      style={{ ['--pct' as string]: pct + '%' }} onChange={(e) => setProgress(+e.target.value)} />
+  );
   return (
-    <div className="player card">
+    <div className={'player card' + (mini ? ' mini' : '')}>
       <button className="play" aria-label={playing ? 'Pause' : 'Knit'} title={playing ? 'Pause' : 'Knit'} onClick={togglePlay}>
         {playing
           ? <svg viewBox="0 0 24 24" width="22" height="22"><rect x="6" y="5" width="4" height="14" rx="1.2" fill="currentColor" /><rect x="14" y="5" width="4" height="14" rx="1.2" fill="currentColor" /></svg>
           : <svg viewBox="0 0 24 24" width="22" height="22"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z" fill="currentColor" /></svg>}
       </button>
+      {mini ? (
+        <>
+          {scrub}
+          <button className="icon-btn small" title="Show the full player" aria-label="Show the full player" aria-expanded={false} onClick={onToggleMini}>{CHEV_UP}</button>
+        </>
+      ) : (
       <div className="player-main">
         <div className="player-top">
           <div className="rowinfo" id="rowinfo"><RowInfo P={P} progress={progress} onInspect={onInspect} /></div>
@@ -64,11 +80,12 @@ export function KnitControls({ piece: P, progress, setProgress, onInspect }: Pro
             <button className="icon-btn small" title="Next stitch" aria-label="Next stitch" onClick={() => setProgress(Math.min(total, prog + 1))}>›</button>
             <button className="icon-btn small" title="Next row" aria-label="Next row" onClick={rowNext}>⏭</button>
             <button className="speed" title="Playback speed" onClick={() => setSpeed(speed >= 32 ? 2 : speed * 2)}>{speed / 8}×</button>
+            <button className="icon-btn small collapse" title="Shrink the player" aria-label="Shrink the player" aria-expanded={true} onClick={onToggleMini}>{CHEV_DOWN}</button>
           </div>
         </div>
-        <input type="range" id="scrub" className="scrub" min={0} max={total} value={prog} aria-label="Knitting progress"
-          style={{ ['--pct' as string]: pct + '%' }} onChange={(e) => setProgress(+e.target.value)} />
+        {scrub}
       </div>
+      )}
     </div>
   );
 }
