@@ -403,23 +403,24 @@ export function workRow(P, G, req) {
         const B = prevUnitB != null ? prevUnitB : fwd ? widx[0] : widx[0] + 1;
         madeK++; origin = B - 0.5 + (fwd ? 1 : -1) * 0.001 * madeK;
       }
-      const p0 = parents[Math.min(j, parents.length - 1)];
-      const pLast = parents[parents.length - 1];
+      // a plain run (k31, p5, a bind-off run) works its stitches one to one; only shaping joins or splits them
+      const own = parents.length > 1 && parents.length === m && !u.cross ? [parents[j]] : parents;
+      const p0 = own[Math.min(j, own.length - 1)];
       // a cable (as many out as in) keeps each position's section, so a cross over a section boundary moves no stitches
       const cablePos = u.ins.length > 1 && u.ins.length === m ? u.ins.slice().sort((a, b) => (fwd ? a - b : b - a)) : null;
-      let sec = o.sec ?? (cablePos ? secOf(W[cablePos[j]]) : parents.length ? secOf(u.ins.length > 1 ? (fwd ? pLast : parents[0]) : p0) : (lastSec ?? nextParentSec()));
+      let sec = o.sec ?? (cablePos ? secOf(W[cablePos[j]]) : own.length ? secOf(own.length > 1 ? (fwd ? own[own.length - 1] : own[0]) : p0) : (lastSec ?? nextParentSec()));
       const yarn = yarnOf(o) || P.yarn;
       const color = G.yarnColor(yarn, P);
       const st = mkSt(P, {
         x: NaN, row: ri, op: o.op || (m > u.ins.length && parents.length ? (j > 0 ? 'inc' : 'n') : 'n'), t: o.op === 'bo' ? 'k' : side === 'RS' ? o.w || 'k' : flip(o.w || 'k'),
-        lean: o.lean, parents, line, sec, word: o.word, yarn, color,
-        fp: o.inFab || (p0 ? p0.fp : null), col: p0 ? p0.col : null, prow: p0 ? Math.max(...parents.map((q) => q.prow || 0)) + 1 : null,
-        len: parents.length ? Math.max(...parents.map((q) => q.len || 0)) + h : null, glen: parents.length ? Math.max(...parents.map((q) => q.glen || 0)) + h : null,
-        colId: p0 && j === 0 ? p0.colId : undefined, hole: o.hole,
+        lean: o.lean, parents: own, line, sec, word: o.word, yarn, color,
+        fp: o.inFab || (p0 ? p0.fp : null), col: p0 ? p0.col : null, prow: p0 ? Math.max(...own.map((q) => q.prow || 0)) + 1 : null,
+        len: own.length ? Math.max(...own.map((q) => q.len || 0)) + h : null, glen: own.length ? Math.max(...own.map((q) => q.glen || 0)) + h : null,
+        colId: p0 && (j === 0 || own !== parents) ? p0.colId : undefined, hole: o.hole,
       });
       if (o.inFab && !p0) st.col = 0;
-      if (j === 0 && parents.length) { const pm = parents.flatMap((q) => q.pm || []); if (pm.length) st.pm = [...new Set(pm)]; }
-      parents.forEach((q) => q.children.push(st));
+      if ((j === 0 || own !== parents) && own.length) { const pm = own.flatMap((q) => q.pm || []); if (pm.length) st.pm = [...new Set(pm)]; }
+      own.forEach((q) => q.children.push(st));
       if (o.name) (P.named[o.name] = P.named[o.name] || { sts: [], kind: o.op === 'bo' ? 'bo' : o.op === 'co' ? 'co' : 'live' }).sts.push(st);
       rowSts.push(st); made.push(st);
       if (o.op === 'bo') { removed.push(origin); st.origin = origin; }

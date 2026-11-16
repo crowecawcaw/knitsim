@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import type { Piece } from '../knit';
 import { rowExtents } from '../draw/stitches';
 
-interface MeshLike { W: number; H: number; x0: number; y0: number; band?: boolean }
+interface MeshLike { W: number; H: number; x0: number; y0: number; band?: boolean; graph?: boolean }
 
 const F_EXISTS = 1, F_PURL = 2, F_LEANL = 4, F_LEANR = 8, F_BO = 16;
 export const FUZZ_SHELLS = 6;
@@ -42,8 +42,9 @@ precision highp int;
 uniform sampler2D uSt, uRows;
 uniform int uCols, uNRows;
 uniform float uBand, uW, uX0, uH, uY0, uAsp;
-uniform float uProg, uSelOrd;
+uniform float uProg, uSelOrd, uGraph;
 varying vec2 vUv;
+varying vec2 vCell;
 varying vec3 vWorld;
 varying vec3 vNrm;
 vec3 srgb2lin(vec3 c) { return pow(c, vec3(2.2)); }
@@ -58,10 +59,11 @@ float h21(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx 
 `;
 
 const VERT = /* glsl */ `
-varying vec2 vUv; varying vec3 vWorld; varying vec3 vNrm;
+varying vec2 vUv; varying vec3 vWorld; varying vec3 vNrm; varying vec2 vCell;
+attribute vec2 aCell;
 uniform float uLift;
 void main() {
-  vUv = uv;
+  vUv = uv; vCell = aCell;
   vec4 w = modelMatrix * vec4(position + normal * uLift, 1.0);
   vWorld = w.xyz; vNrm = normalize(mat3(modelMatrix) * normal);
   gl_Position = projectionMatrix * viewMatrix * w;
@@ -153,6 +155,8 @@ void main() {
   vec4 Rc = rowT(rc);
   float xc = xIn(Rc);
   int ic = int(floor(xc - Rc.x + 0.5));
+  // a stitch-graph cell may sit across rows that don't line up in the table: it belongs to its top stitch
+  if (uGraph > 0.5) { rc = int(floor(vCell.y + 0.5)); Rc = rowT(rc); ic = int(floor(vCell.x - Rc.x + 0.5)); }
   vec4 Sc = (rc >= 0 && rc < uNRows && ic >= 0 && ic < uCols) ? stT(ic, rc) : vec4(0.0);
   if ((int(Sc.g) & 1) == 0) discard;
 
@@ -230,6 +234,7 @@ void main() {
   int rc = int(floor(rf + 0.5));
   vec4 R = rowT(rc); float xc = xIn(R);
   int ic = int(floor(xc - R.x + 0.5));
+  if (uGraph > 0.5) { rc = int(floor(vCell.y + 0.5)); R = rowT(rc); ic = int(floor(vCell.x - R.x + 0.5)); }
   if (rc < 0 || rc >= uNRows || ic < 0 || ic >= uCols) discard;
   vec4 S = stT(ic, rc); if (!shown(S)) discard;
   // stray fibres: each cell of a fine grid holds one hair, shorter hairs end in lower shells
@@ -256,7 +261,9 @@ export function fabricMaterials(P: Piece, mesh: MeshLike, sg: number, rg: number
   const data = fabricData(P);
   const shared: Record<string, THREE.IUniform> = {
     uSt: { value: data.st }, uRows: { value: data.rows }, uCols: { value: data.cols }, uNRows: { value: P.nrows },
-    uBand: { value: mesh.band ? 1 : 0 }, uW: { value: mesh.W }, uX0: { value: mesh.x0 }, uH: { value: mesh.H }, uY0: { value: mesh.y0 },
+    // graph meshes carry stitch coordinates (x in the row, row) straight in their uv
+    uBand: { value: mesh.band ? 1 : 0 }, uGraph: { value: mesh.graph ? 1 : 0 },
+    uW: { value: mesh.graph ? 1 : mesh.W }, uX0: { value: mesh.graph ? 0 : mesh.x0 }, uH: { value: mesh.graph ? 1 : mesh.H }, uY0: { value: mesh.graph ? 0 : mesh.y0 },
     uAsp: { value: sg / rg }, uProg: { value: 1e9 }, uSelOrd: { value: -1 },
   };
   const cloth = new THREE.ShaderMaterial({
