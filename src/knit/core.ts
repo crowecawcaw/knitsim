@@ -657,14 +657,17 @@ const ARM_ANGLE = 50 * Math.PI / 180;
 const TABLE = { c: [0, 2, 24], r: 13, top: 2, depth: 1.5 };
 // foot forms standing on the table, toes toward the viewer; side +1 is the wearer's left (+x)
 const FOOT = { x: 3.4, heel: TABLE.c[2] - 5.4, toe: TABLE.c[2] + 5.4, y0: TABLE.top + 0.9 };
-function footCaps(side) {
+// k scales the form about its toe, to fit what is knitted (a sock is smaller than a felted shoe)
+function footCaps(side, k = 1) {
   const cx = side * FOOT.x, { heel, toe, y0 } = FOOT;
+  const sc = c => ({ a: scP(c.a), b: scP(c.b), ra: c.ra * k, rb: c.rb * k });
+  const scP = q => [cx + (q[0] - cx) * k, TABLE.top + (q[1] - TABLE.top) * k, toe + (q[2] - toe) * k];
   return [
     { a: [cx - 0.5, y0 + 1.0, heel + 1.0], b: [cx - 0.45, y0 + 0.8, toe - 0.8], ra: 1.0, rb: 0.8 },
     { a: [cx + 0.5, y0 + 1.0, heel + 1.0], b: [cx + 0.6, y0 + 0.8, toe - 1.1], ra: 1.0, rb: 0.75 },
     { a: [cx, y0 + 1.0, toe - 3.2], b: [cx, y0 + 1.8, heel + 2.4], ra: 0.95, rb: 1.2 },
     { a: [cx, y0 + 1.8, heel + 1.9], b: [cx, y0 + 10, heel + 1.9], ra: 1.35, rb: 1.5 },
-  ];
+  ].map(sc);
 }
 
 const stretchOf = fab => !fab ? 1.15 : /rib/.test(fab) ? 1.55 : /garter|moss|seed/.test(fab) ? 1.2 : 1.15;
@@ -786,6 +789,8 @@ function placePiece(P, mesh, at, built, neckRef) {
       const sc = scarfFrame((y - Hin / 2));
       const u = x - cx;
       w = [0, 1, 2].map(q => sc.p[q] + sc.w[q] * u);
+    } else if ((at === 'left_foot' || at === 'right_foot') && mesh.graph && isTube(mesh)) {
+      w = tubePoint(mesh, k, at === 'left_foot' ? 1 : -1);
     } else if ((at === 'left_foot' || at === 'right_foot') && mesh.graph) {
       // drape over the foot as the bowl the rounds make (what was worked after them is filled in below)
       const side = at === 'left_foot' ? 1 : -1, l = mesh.local[k];
@@ -798,7 +803,11 @@ function placePiece(P, mesh, at, built, neckRef) {
     }
     pos[k * 3] = w[0]; pos[k * 3 + 1] = w[1]; pos[k * 3 + 2] = w[2];
   }
-  if (mesh.graph && (at === 'left_foot' || at === 'right_foot')) fillOver(mesh, pos, footCaps(at === 'left_foot' ? 1 : -1));
+  if (mesh.graph && (at === 'left_foot' || at === 'right_foot')) {
+    const side = at === 'left_foot' ? 1 : -1;
+    if (isTube(mesh)) fillOver(mesh, pos, footCaps(side, mesh.footK), tubeAnchor(mesh), false);
+    else fillOver(mesh, pos, footCaps(side));
+  }
   return pos;
 }
 // A closed cast-on worked in rounds is a bowl: each round's length (its stitch count) sets how far out
@@ -815,16 +824,42 @@ function bowlOf(mesh) {
   }
   return out;
 }
+// A sock: started from a short cast-on line at the toe, so the rounds run along the foot as a tube,
+// and a short-row heel turns them up the leg. (A shoe's cast-on runs the length of the sole instead.)
+const isTube = mesh => {
+  if (mesh.tubeMode == null) { const pMax = Math.max(...mesh.tube.p); mesh.tubeMode = 2 * mesh.flatL < 0.4 * pMax; }
+  return mesh.tubeMode;
+};
+const tubeAnchor = mesh => mesh.tubeA || (mesh.tubeA = Uint8Array.from(mesh.tube.s, s => (isNaN(s) ? 0 : 1)));
+function tubeFrame(mesh) {
+  if (mesh.tf) return mesh.tf;
+  const { tube, flatL: L, w0 } = mesh;
+  const reach = p => Math.max(0, (p - 2 * L) / (2 * Math.PI) - w0);
+  const R = reach(Math.max(...tube.p)) + w0;          // the foot's half-height
+  // size the form so its ankle sits where the leg rises
+  const k = Math.min(1.3, Math.max(0.5, (tube.bendS + R) / 8.9));
+  mesh.footK = k;
+  const yc = TABLE.top + 0.9 * k - 0.15 + R, zt = FOOT.toe;
+  return (mesh.tf = { reach, R, k, yc, zt, zB: zt - tube.bendS });
+}
+function tubePoint(mesh, v, side) {
+  const { tube, theta, flatL, w0 } = mesh; const f = tubeFrame(mesh); const cx = side * FOOT.x;
+  const s = tube.s[v];
+  if (isNaN(s)) return [cx, f.yc - f.R * 0.5, f.zB - f.R * 0.6];   // the heel: filled in afterwards
+  const q = stadium(flatL, w0, (theta[v] - tube.soleT + 0.75 + 2) % 1, f.reach(tube.p[v]));
+  if (!tube.leg[v]) return [cx + q.x, f.yc + q.y, f.zt - s];
+  return [cx + q.x, f.yc + f.R + s, f.zB - f.R + q.y];
+}
 // stitches worked after the last full round (a toe flap) span the gap their joins leave, like a film
 // over the opening, lifted clear of the foot
-function fillOver(mesh, pos, caps) {
-  const { anchor, nbrs } = mesh; const n = anchor.length;
+function fillOver(mesh, pos, caps, anchor = mesh.anchor, lift = true) {
+  const { nbrs } = mesh; const n = anchor.length;
   for (let it = 0; it < 300; it++) for (let v = 0; v < n; v++) {
     if (anchor[v] || !nbrs[v].length) continue;
     let x = 0, y = 0, z = 0; for (const u of nbrs[v]) { x += pos[u * 3]; y += pos[u * 3 + 1]; z += pos[u * 3 + 2]; }
     const m = nbrs[v].length; pos[v * 3] = x / m; pos[v * 3 + 1] = y / m; pos[v * 3 + 2] = z / m;
   }
-  liftOver(mesh, pos, caps);
+  if (lift) liftOver(mesh, pos, caps);
   // then let the springs give those stitches their own size, with the foot pushing them clear
   const cons = mesh.cons.filter(c => !anchor[c[0]] || !anchor[c[1]]);
   const th = 0.5;
@@ -1018,7 +1053,8 @@ function makeSim(doc) {
       }
     }
   }
-  const feet = [...new Set(parts.filter(p => p.at === 'left_foot' || p.at === 'right_foot').map(p => p.at))].flatMap(at => footCaps(at === 'left_foot' ? 1 : -1));
+  const feet = [...new Set(parts.filter(p => p.at === 'left_foot' || p.at === 'right_foot').map(p => p.at))]
+    .flatMap(at => footCaps(at === 'left_foot' ? 1 : -1, parts.find(p => p.at === at).mesh.footK || 1));
   const useTable = parts.some(p => p.at === 'table') || feet.length > 0;
   const centred = parts.filter(p => p.at === 'head');
   const nStages = doc.nStages || 1;

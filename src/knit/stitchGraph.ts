@@ -29,6 +29,8 @@ export function buildGraphMesh(P, sg, rg, stretchOf) {
   const addCourse = (a, b) => { if (a === b || und.has(key(a, b))) return; und.add(key(a, b)); dir.set(a + '>' + b, true); course.push([a, b]); };
 
   let needle = (P.rows[0].order || P.rows[0].stitches).slice(); let fwdNow = true; let fullProw = 0; const levelRows = [0];
+  // every full round in work order, and whether short rows came just before it (a heel)
+  const fullRows = [{ r: 0, turned: false }]; let turned = false;
   // angle around the tube: the cast-on spread evenly, every later stitch over the stitch(es) it came from
   const circMean = (ts) => { let x = 0, y = 0; ts.forEach((t) => { x += Math.cos(2 * Math.PI * t); y += Math.sin(2 * Math.PI * t); }); return ((Math.atan2(y, x) / (2 * Math.PI)) + 1) % 1; };
   let first = true;
@@ -89,6 +91,7 @@ export function buildGraphMesh(P, sg, rg, stretchOf) {
     // a full round, level all the way round (a bind-off after a toe flap is full but not level)
     const pr = R.stitches.map((s) => s.prow || 0);
     if (needle.every((s) => inRow.has(s)) && Math.max(...pr) - Math.min(...pr) <= 6) { fullProw = Math.max(fullProw, ...pr); levelRows.push(r); }
+    if (needle.every((s) => inRow.has(s))) { fullRows.push({ r, turned }); turned = false; } else turned = true;
     ring((s) => inRow.has(s));
     if (r < P.rows.length - 1) needle = needle.filter((s) => s.op !== 'bo');
   }
@@ -169,12 +172,27 @@ export function buildGraphMesh(P, sg, rg, stretchOf) {
     const d = isFinite(depth[v]) ? depth[v] : (s.prow || 0) / rg; const t = (theta[v] + off) % 1;
     return { ...stadium(flatL, w0, t, d), d, t };
   });
+  // as a tube (a sock): each full round's distance along the foot, or up the leg once a heel has turned it
+  const tube = { s: new Float64Array(n).fill(NaN), leg: new Uint8Array(n), p: new Float64Array(n), soleT: 0.75, bendS: 0 };
+  let along = 0, leg = 0, heelRows = [];
+  fullRows.forEach(({ r, turned: tr }, i) => {
+    if (i > 0) {
+      if (tr && !leg) { leg = 1; tube.bendS = along; along = 0; heelRows = P.rows.slice(fullRows[i - 1].r + 1, r); }
+      else along += 1 / rg;
+    }
+    const vs = P.rows[r].stitches.map((st) => vid.get(st));
+    vs.forEach((v) => { tube.s[v] = along; tube.leg[v] = leg; tube.p[v] = vs.length / sg; });
+  });
+  if (!leg) tube.bendS = along;
+  // the heel is worked over the sole: that side of the ring faces down
+  const heelV = heelRows.flatMap((R) => R.stitches.map((st) => vid.get(st)));
+  if (heelV.length) tube.soleT = circMean(heelV.map((v) => theta[v]));
   const seamLocal = sts.map((s) => ({ x: s.x / sg, y: s.row / rg }));
   let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
   local.forEach((l) => { x0 = Math.min(x0, l.x); x1 = Math.max(x1, l.x); y0 = Math.min(y0, l.y); y1 = Math.max(y1, l.y); });
   return {
     graph: true, local, uv: new Float32Array(n * 2), tris, cons, sts, seamLocal, near, cells,
-    flatL, w0, soleDepth, anchor, nbrs, rings, x0: x0 * sg, y0: y0 * rg, W: (x1 - x0) * sg, H: (y1 - y0) * rg,
+    flatL, w0, soleDepth, anchor, nbrs, rings, tube, theta, x0: x0 * sg, y0: y0 * rg, W: (x1 - x0) * sg, H: (y1 - y0) * rg,
   };
 }
 
