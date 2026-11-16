@@ -134,7 +134,7 @@ piece sock round
   row "k31 turn" ; row "ds p29 turn"             # the heel is worked on the 32 sole sts only
   repeat 10 { row "ds k ^-1 turn" ; row "ds p ^-1 turn" }     # stop 1 st short of the last turn
   repeat 10 { row "ds k ^ k1 turn" ; row "ds p ^ p1 turn" }   # work 1 st past it
-  row                                            # a full round closes the last gaps
+  row                                            # from the last turn to the end of the round; the next round closes the other gap
   expect 64 ; expect length ${foot}in at sole.center
   rows until 6in from heel at instep.center "*k2 p2*"
   bind_off using stretchy
@@ -176,7 +176,7 @@ piece pinky round
 end
 
 assemble
-  place hand at left_hand                                       # the fingers follow their joins
+  place hand at left_hand right_hand                            # a pair; the fingers follow their joins
 end
 ```
 
@@ -224,26 +224,31 @@ end
 
 ## Mitered-square blanket
 
-Twenty-five squares, each started from its neighbours. The loop variables are used in names and in `if`.
+Twenty-five garter squares in one colour, each started from its neighbours. The loop variables are used in names and
+in `if`. Each square has 55 rows: a WS row, 27 decrease rows on the RS (57 → 3 stitches) and a last `sk2p` on the WS.
+Edge names for mitred pieces are in [objects.md](objects.md#mitred-and-modular-pieces).
 
 ```knit
-gauge 16 sts x 32 rows = 4 in
-yarn A #c8553d ; yarn B #f2e8cf
+gauge 14 sts x 24 rows = 4 in                    # stocking stitch, as printed; garter is taken as square (28 rows)
+yarn #3f7d4e
 
-for r in 1..5 { for c in 1..5 {
+for r in 1..5 { for c in 1..5 {                  # r = strip, from the bottom; c = square, from the left
   piece sq_${r}_${c}
     if r == 1 && c == 1 { cast_on 57 ws }
     else if c == 1 { join pick_up 29 from sq_${r - 1}_1.left + cast_on 28 ws }
     else if r == 1 { join cast_on 28 + pick_up 29 from sq_1_${c - 1}.right ws }
     else { join pick_up 29 from sq_${r - 1}_${c}.left + pick_up 28 from sq_${r}_${c - 1}.right ws }
-    if (r + c) % 2 == 0 { yarn A } else { yarn B }
-    rows until 3 sts garter every 2 dec 2 center using sk2p     # the mitre: a double decrease every RS row
-    expect 3 ; row ; row dec 2 center using sk2p ; bind_off
+    row garter                                   # row 1 (WS)
+    rows until 3 sts every 2 from row 1 dec 2 center using sk2p   # rows 2–54: sk2p on the centre stitch, every RS row
+    expect 3
+    row "sk2p" ; expect 1                        # row 55 (WS); a one-off row, the fabric is still garter
+    bind_off                                     # fasten off
   end
 } }
 
 assemble
   place sq_1_1 at table                          # joined pieces follow
-  expect length 7in of sq_5_5.left within 10%    # one side of a square
+  expect length 8in of sq_5_5.left within 10%    # one side of a square: 55 garter rows
+  expect length 40in from sq_5_1.left[start] to sq_5_5.left[end] within 10%   # the top edge of the blanket
 end
 ```

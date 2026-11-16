@@ -63,10 +63,59 @@ What lines and points are for:
 - **Tack.** A seam between two points pulls them together: `seam head.row[30][4] = head.row[33][4]` (a pinched mouth,
   the gap between two joined legs).
 - **Afterthought openings.** Mark the row (`marker heel`) and knit on. The heel or thumb is a new piece:
-  `join sock.row[heel][sole].below + sock.row[heel][sole].above`. The same form cuts a pair of pieces knitted as one.
+  `join sock.row[heel][sole].below + sock.row[heel][sole].above`. To cut a whole piece in two, use
+  [`cut`](#cutting-a-piece-apart-and-pairs).
 - **Pick up "at the corner".** `pick_up 2 from hand.thumb[start]` picks up at the end of a held run.
-- **Measure.** `expect length 13in of sleeve.row[underarm]`, `expect length 68in of shawl.bottom`.
+- **Measure.** `expect length 13in of sleeve.row[underarm]`, `expect length 68in of shawl.bottom`. Between two points,
+  across pieces: `expect length 7.25in from hand.bottom[mid] to middle.top[mid]` (in `assemble`).
 - **Trims and embroidery**, below.
+
+## Cutting a piece apart, and pairs
+
+```knit
+piece pair round                 # two socks as one tube: sock 1 toe-up, waste rounds, sock 2 cuff-down
+  …
+  marker top1 ; rows 2 st ; marker top2
+  …
+end
+cut pair at top1 to top2 as sock1 sock2      # top level, after the piece: the 2 rounds are unravelled
+
+assemble
+  place sock1 at left_foot ; place sock2 at right_foot
+end
+```
+
+- `cut PIECE at ROW as A B` opens one whole row; `at ROW to ROW` also discards the rows from the first to the second.
+  A is the part below, B the part above. PIECE no longer exists after the line.
+- The cut ends are live: `A.top` and `B.bottom`. Finish them like any live stitches (`piece cuff1 round ; join sock1.top ;
+  bind_off using stretchy ; end`, or a graft). If a piece already picked up from the cut row (`pick_up 64 from
+  pair.row[top1]`, a bind-off worked into the purl bumps before unravelling), the end is finished and it follows its part.
+- Only whole rows can be cut. A steek (a cut up a column) is still a `note`.
+
+A **pair** from one piece is a placement: `place mitten at left_hand right_hand mirrored` makes the piece and everything
+joined to it twice. Leave `mirrored` out when the two are identical (plain socks, fingerless tubes). When left and right
+differ in the knitting itself, write both with `for h in l r { … }`.
+
+## Mitred and modular pieces
+
+A mitred square is cast on along two of its sides and decreased at the centre until one stitch is left.
+
+- `bottom` is the whole cast-on, both legs. Name the legs in the start statement (`cast_on a:28 corner:1 b:28`,
+  `join pick_up a:29 from … + cast_on b:28`), or take `bottom[start:mid]` and `bottom[mid:end]`.
+- `right` and `left` are the row-end edges. They are the other two sides of the square and meet at the last stitch
+  (`left[end]` = `right[end]`). `right` starts where the first leg of the cast-on starts (the right edge, RS view) and
+  `left` where the last leg ends. What a pattern calls the "top" and "side" of a finished square are these two.
+- There is no `top` edge: the piece ends in a point.
+- The overall size of a blanket is a distance between two outer corners:
+  `expect length 40in from sq_5_1.left[start] to sq_5_5.left[end]`.
+- Each `pick_up N` is compared with its edge, so "29 sts along a 55-row side" is reported as a ratio and a length.
+- Garter squares need a garter row gauge. Without `gauge garter …`, garter is taken as square.
+
+## Shaping by hand
+
+Squeezing, pushing or sculpting a stuffed piece ("push the nose back into the muzzle a little") has no statement: write
+a `note`. If the dent matters to the shape, a tack is the nearest thing: `seam head.nose = head.row[20][12]`. Positions
+that the pattern gives only in a photo are the translator's estimate; say so in a comment.
 
 ## Stuffing
 

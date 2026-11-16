@@ -11,7 +11,8 @@ as a fabric (`rows 2in "k3 *p2 k2* p2 k3"`), as one row (`row "*k6 k2tog*"`) or 
 | Kind | Words |
 |---|---|
 | Plain | `k p k1tbl p1tbl k1b` (knit into the stitch below). `k3` = knit 3 |
-| Slipped | `sl1` (yarn on the WS), `sl1wyif`, `sl1wyib` (yarn in front or in back, as worked) |
+| In pattern | `pat`, `patN`: work the next stitches in the fabric in force for them; see [In pattern](#in-pattern) |
+| Slipped | `sl1` (yarn on the WS), `sl1wyif`, `sl1wyib` (yarn in front or in back, as worked). Purlwise or knitwise is not recorded: "slp1 wyif" is `sl1wyif` |
 | Increases | `yo yo2 m1 m1l m1r m1p m1pl m1pr lli rli kfb kfbf` (`yo2` and `kfbf` add 2) |
 | Decreases | `k2tog ssk k2togtbl p2tog ssp p2togtbl k3tog sssk p3tog cdd sk2p` (`cdd` = s2kp) |
 | Several into several | `(…)in1`, `(…)inN`: work the group into the next N stitches together. `(p1 k1 p1)in1` makes 3 from 1; `(k1 yo k1 yo k1)in4` makes 5 from 4 |
@@ -26,8 +27,8 @@ as a fabric (`rows 2in "k3 *p2 k2* p2 k3"`), as one row (`row "*k6 k2tog*"`) or 
   `c1/1f(p1 k1tbl)` = "sl 1 to cn in front, p1, k1 tbl from cn"; `c1/1/1b(k1tbl p1 k1tbl)`. No cross changes the count.
 - **Brioche counts.** A stitch and its yarn-over wrap count as one stitch, in `sl1yo` and in `brk`/`brp`.
 - **`bo` and `co`.** `boN` removes exactly N stitches and the words after it are new stitches, so "BO 25, k25
-  (including the stitch on the needle)" is `bo25 k24`. A bound-off or cast-on run inside a row can be named by putting
-  it in its own section.
+  (including the stitch on the needle)" is `bo25 k24`. Name a bound-off or cast-on run with `:NAME`
+  ([Names in a row](#names-in-a-row)).
 - **Custom words.** A top-level `key NAME = STITCHES` adds a word for written rows and `stitch` bodies:
   `key star = (k1 yo k1 yo k1)in5`, then `"k1 star k star k1"`. It can be used as a `chart` symbol too.
 
@@ -37,6 +38,12 @@ as a fabric (`rows 2in "k3 *p2 k2* p2 k3"`), as one row (`row "*k6 k2tog*"`) or 
 - `*…*` repeats to fill, and `(…)xN` repeats N times (N may be a per-size list): `"k19 (m1l k39)x5 m1l k20"`.
 - `*…*` may be followed by one bare fill, which takes whatever is left over, with no warning:
   `"sl1 kfbf *yo k2tog* k"` = "*yo, k2tog* to last 1 or 2 sts, knit to end".
+- A fill and a `*…*` may be **empty**: `"*k2tog* k"` on an even count knits nothing after the repeat ("k2tog around,
+  k1 if a stitch is left"). A `*…*` that can't be worked even once is still an error when nothing else uses the stitches.
+- **`(…)?`** is an optional group: it is worked once if enough stitches are left for it, and skipped otherwise. After a
+  `*…*`, the repeat is worked as often as it fits, then each optional group in turn, then a bare fill takes the rest:
+  `"*k2tog k2* (k2tog)? k"` = "*k2tog, k2* around, k2tog if 2 or 3 sts are left, knit any last stitch". One row then
+  serves every size, whatever its count leaves over.
 - The checker verifies that the row uses exactly the live stitches, and computes the new count.
 - When a written row stays in force for later rows, they are worked as the stitches present themselves (knit the knits).
 
@@ -53,6 +60,7 @@ written between the fill and the stop count back from the stop. Each segment may
 | `\|` | the next section boundary ("slip marker"). The end of the row also satisfies a final `\|` |
 | `^` | the nearest short-row gap ahead (see below); with no gap ahead, the end of the row |
 | `^-N` | N stitches before that point |
+| `\|NAME` | The boundary at the start of section NAME, or the point marker NAME (the fill stops before that stitch). `\|NAME-N` stops N stitches earlier |
 
 ```knit
 row "k3 m1l *k1 yo k2tog* m1r | k1 | m1l *k1 yo k2tog* m1r k3"   # triangle shawl: a fill in each wing
@@ -62,7 +70,36 @@ row "(k ssk | k1 k2tog)x2 k"         # "k to 2 before m, ssk, sm, k1, k2tog" at 
 ```
 
 A `*…*` or `(…)xN` group that contains `|` is worked once per section. The checker verifies each segment against its
-section count.
+section count. A stitch made at a boundary belongs to the segment it is written in: `"k lli | k4 | rli k"` puts both
+new stitches in the outer sections.
+
+## In pattern
+
+`pat` works stitches **as established**: each one in the fabric in force for its part or section, at that stitch's own
+place in the repeat, across and up. `patN` works N stitches; a bare `pat` fills to the next stop. A plain `row` is `"pat"`.
+
+```knit
+row "pat ^-2 wt" ; row "pat ^-2 wt"          # short rows in pattern: "work to 2 before the wrapped st, w&t"
+row "k34 pat15 wt"                           # "k34, work the first 15 sts of the cable panel, w&t"
+row "pat |cb" ; row "pat |cb-3 k2tog k1"     # "work in pattern to the CB marker"; "… to 3 before it"
+row "k2tog pat ssk"                          # decrease at each end, keeping the pattern between
+```
+
+- Stitches that `pat` works move on one pattern row; the others wait. When a short row leaves the stitches of one part on
+  different pattern rows, each column goes on from its own row, and a cross or decrease that would span two rows is
+  worked plain, with a warning.
+- A single `row "…"` never changes the fabric in force, so the rows after a run of short rows go on in pattern.
+- Over `st`, `garter` and ribs, `pat` knits the knits and purls the purls of the RS look, whichever side is being worked.
+
+## Names in a row
+
+- `WORD:NAME` names the stitches that word makes or removes. `"k5 co3:nose k5"` and `"k8 bo12:slot k"` make the edges
+  `piece.nose` and `piece.slot` (a cast-on run is also a section); `"k10 k12:lid k10"` names a line of 12 stitches in
+  this row, `piece.lid`, for seams, pick-ups and trims.
+- A bare `:NAME` is a point marker at the place reached, between the last stitch worked and the next one:
+  `"k12 :eye_l wt"` marks the turning point, where an upper and a lower block of short rows meet. It is the same kind
+  of name as `marker NAME WHERE` and does not make a section boundary.
+- Names follow the [namespace rules](../../SYNTAX.md#names). In a repeat or a loop, build them with `${}`.
 
 ## Short rows
 
@@ -77,7 +114,10 @@ A row may end before the end of the needle.
   direction of work. A gap closes when a row is worked across it.
 - Any stitch may be used in a short row, including shaping, `coN` and `boN`.
 - **In the round**, a row after a turn may run back across the start of the round. The first row that doesn't end in
-  `turn` must be an RS row; it runs to the start of the round and rounds go on from there.
+  `turn` must be an RS row. It starts at the last turn and runs on to the end of the round, closing the gaps it
+  crosses; written out, it lists only those stitches. Rounds go on from the round start, in section order, and the
+  next one closes the remaining gap. To make the next round begin elsewhere (the heel first), use `round_start`.
+- "Turn the work" in magic loop or on two circulars only changes needle. It is not a `turn`.
 - Stitches a row doesn't reach keep their fabric, their place in a pattern repeat and their length; see
   [Semantics](../../SYNTAX.md#rows-and-columns).
 

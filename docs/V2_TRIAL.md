@@ -286,3 +286,65 @@ A few general mechanisms carry most of the new use cases:
 
 Short rows, mitres, toys and centre-out shapes all need two things the v1 engine doesn't have: a row count per stitch
 column, and a layout computed from how stitches connect, not one rectangle per piece.
+
+## Corpus 2 — round 1 test and spec revision 2
+
+Five hard corpus-2 patterns were test-translated by Haiku with the Round-1 spec. The spec was then revised again.
+
+| Pattern | Done | Main issues |
+|---|---|---|
+| MIB mitered blanket (25 joined squares) | 90% | No garter gauge; pick-up count not checked against the edge; overall size not assertable; mitre edge names and `center` on odd counts unclear. The spec's own mitre example was wrong (56 rows, two colours). |
+| GAM shorts (2 families × 5 sizes) | 90% | FAIL: "desired length" target, "remove marker". Size families and per-family yarn; short rows inside a cable panel; "work to CB marker"; what `resume` restores; pick-up starting mid-edge. |
+| NBP toy head | 80% | FAIL: pattern count errata (not syntax); hand shaping of the nose. No name for a cast-on run inside a written row or for a point between short-row blocks; sticky fabric after written rows; `start` on WS rows; `mid` on a two-edge seam. |
+| GLV gloves (5 sizes, both hands) | 90% | FAIL: per-needle counts; length cuff→fingertip. Size-dependent leftover in a tip round; `like` doesn't copy joins; width of a tube vs flat width; empty fills; holder and section with one name. |
+| PAL socks (two socks in one tube) | 80% | FAIL: unravelling the tube into two socks; two placements. Pattern phase across turned short rows; rib phase per size; order of the closing round after a heel; which section owns an increase beside a marker. |
+
+### Resolutions
+
+FAIL:
+
+- Separate one piece into two (PAL) → top-level `cut PIECE at ROW [to ROW] as A B`; the ends are live `A.top`, `B.bottom`.
+- One piece on both feet or hands (PAL, GLV) → `place PIECE at SPOT SPOT [mirrored]` makes the piece and its joined pieces twice.
+- Per-needle counts (GLV) → needles are sections: `sections front:23 back:21`, `expect front=23 back=21`. No new syntax.
+- Length across pieces (GLV, MIB) → `expect length LEN from POINT to POINT`, the shortest distance over the fabric through joins.
+- Remove a marker (GAM) → `sections NAME = A + B` and `sections off`.
+- "Desired length" (GAM) → a `float` param used as a target (`rows until ${rise - 2.25}in at front.center`); its default may be a per-size list.
+- Hand shaping (NBP) → out of scope: `note`, or a tack (`seam POINT = POINT`) when the shape matters.
+- Pattern count errors (NBP) → not syntax: translate as printed, keep the printed `expect`, add a `note`.
+
+UNCLEAR:
+
+- `center` on odd and even counts → middle stitch, or the gap between the two middle stitches; an off-parity run leaves the extra stitch on the `end` side.
+- `mid` on a two-edge seam → a position applies to one edge, or to a parenthesised sum: `(a.left + b.left)[mid]`.
+- Sticky fabric after written rows → a single `row "…"` is a one-off and leaves the fabric in force; `rows N "…"` sets it. A piece starts in `st`.
+- `start` on WS rows, point markers → `marker NAME WHERE` reads WHERE on the row just worked, as worked; `left`/`right` are fixed.
+- `resume` after `hold all` → restores sections, per-part fabric and phase, yarn and needle exactly.
+- Section and holder with one name → a name follows its stitches (no clash); reusing it for other stitches is an error.
+- Owner of an increase beside a marker → the section of the stitch it is worked into; a strand increase goes to the section worked last unless `|` comes first; in a written row, the segment it is written in.
+- Closing round after a short-row heel → the first unturned row runs from the last turn to the end of the round; the next round, from the round start in section order, closes the rest. `round_start` changes where it begins.
+- `expect width` in the round → the circumference; `expect width LEN flat` is half of it.
+- Empty fills → a fill and a `*…*` may be empty.
+- Fabric parts with sections → FABRIC:SECTION, `row st:k_a cable:cp st:k_b`.
+- Pick-up starting mid-edge → two ranges in a parenthesised sum.
+- Quoted enum options in `if` → `if size in "XS/S" M`.
+- Magic-loop "turn the work" → not a `turn`.
+- Block order → header, `stitch`/`chart`/`define`, pieces in knitting order, `assemble`.
+- `slp1 wyif` → `sl1wyif`; slip direction is not recorded.
+- Mitre edges → `bottom` is the whole cast-on, `left`/`right` the row-end edges that meet at the last stitch (objects.md).
+
+HARD:
+
+- Pattern phase across turned short rows; partial panel; "work to CB marker" → the fill word `pat`/`patN` ("in pattern") and the stop `|NAME[-N]`; each stitch column keeps its own pattern row.
+- Rib phase per size; chart start column per size → `FABRIC shift N`, N may be a per-size list.
+- Size families and per-family yarn → `param size enum women(…) men(…)`, `//` between groups in lists, `if size in women`, top-level `if` round any header statement.
+- Trailing remainder in a repeat → optional group `(…)?` after `*…*`: `"*k2tog k2* (k2tog)? k"`.
+- `like` and joins → the `for h in l r` idiom is the stated form for differing hands; pairs use `place … at SPOT SPOT`.
+- Naming a cast-on run in a row; points between short-row blocks → `WORD:NAME` (`co3:nose`, `bo8:slot`, `k12:lid`) and a bare `:NAME` point.
+- Garter gauge → with no `gauge garter` line garter is taken as square (rows = 2 × stitches), and the checker says so.
+- Pick-up count vs edge length → every `pick_up N` is compared with its edge; ratio reported, warning beyond 15%, never an error.
+- Outer edges and cast-on legs of modular pieces → `cast_on a:28 corner:1 b:28` (named runs), `bottom[start:mid]`, and the `from … to` measure for the overall size.
+- Opposite cable rotations → `stitch` bodies expand `${}`: `let lc = c6b` in a top-level `if`.
+- The mitre example now has 55 rows, one colour, and asserts the blanket's size.
+
+Not changed: cable phase that depends on knitted length; hip and leg circumference with no stated location; positions
+given only in figures; "same reps as leg 1" (still `match PIECE[a:b]`, which counts rows); steeks (a cut up a column).

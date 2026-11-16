@@ -337,7 +337,7 @@ in [docs/syntax](syntax) and not implemented.
 | ❌ | A knitted-in casing left partly open | "k each st together with CO to last 10 sts" | BLC | `fold at turning` + `note`; the elastic is a `trim` |
 | ❌ | Stop when a yarn runs out | "continue until you run out of yarn A" | DAS ALY | a length or count param |
 | ❌ | A cable that crosses the round start | "use the 1st st of rnd 17 to cross your last cable" | GOA | `round_start at 1` before the round and `round_start at -1` after it |
-| ❌ | Chart columns per size | "size M: start with the 3rd st and end with st 7" | GOA | one chart per size group inside a top-level `if` |
+| 📝 | Chart columns per size | "size M: start with the 3rd st and end with st 7" | GOA | `leaf shift 0/2/0` (revision 2) |
 | ❌ | Two-layer (double-knit) fabric in the simulation | "*k1, sl1 wyif*" gives a double-thick band | EFH | a `stitch` with `sl1wyif` and its own `gauge`; drawn as one layer |
 | ❌ | Curved attachment lines | "ears are sewn along a slight C-curve" | ELY | a straight `row` line |
 | ❌ | A part pushed into the body or threaded through holes | "pull the tail partway in"; "pass the leg through two yo holes" | SDL | `seam` the cord to a point + `note` |

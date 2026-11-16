@@ -43,6 +43,11 @@ end
 
 - Use them like any fabric: `rows 16 checked`, `rows until 8in leaf`, `st leaf:48 st`, `rows leaf[9:13]`.
 - A fabric part may take a row range too: `st leaf[25:32]:48 st` starts the panel at row 25 and cycles rows 25–32.
+- `shift N` starts the across-repeat N stitches in, per size if need be: `leaf shift 2/0/2` = "sizes S and L: start
+  with the 3rd stitch of the chart"; `rib1x1 shift 1` = "p1, k1 rib". See [Fabrics](../../SYNTAX.md#fabrics).
+- In a turned short row, write `pat` to keep the pattern going ([written-rows.md](written-rows.md#in-pattern)).
+- A `stitch` body is expanded like any line, so a panel that differs by one word needs one body:
+  `let lc = c6b` (or `c6f` in the other branch of a top-level `if`), then `p4 ${lc} p2 k8 p2 …`.
 - **Across:** the `*…*` or `|…|` repeat is worked as many times as fits the part it fills; stitches outside it are worked
   once at each side. With no marks, the whole line is the repeat.
 - **Up:** as a fabric, the rows cycle 1…n for as long as it stays in force. `rows NAME` works them exactly once.
