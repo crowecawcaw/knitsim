@@ -2,6 +2,10 @@
 // TODO: type this module incrementally.
 // ===== Knit DSL core: parser → stitch graph → checks → meshes → cloth sim =====
 
+import { buildDoc } from './engine/build';
+import { assemble } from './engine/assemble';
+import { edgeOf as engineEdgeOf } from './engine/edges';
+
 // ---------- Tokenizing into statements ----------
 function splitStatements(src) {
   // returns flat list of {line, toks} with '{' and '}' as their own statements
@@ -167,14 +171,14 @@ function evalExpr(expr, vars, line) {
     even: x => 2 * Math.round(x / 2), odd: x => 2 * Math.floor(x / 2) + 1, mult: (x, m) => m * Math.round(x / m) };
   function prim() {
     ws();
-    if (s[i] === '(') { i++; const v = add(); ws(); if (s[i] !== ')') throw new Error('missing )'); i++; return v; }
+    if (s[i] === '(') { i++; const v = tern(); ws(); if (s[i] !== ')') throw new Error('missing )'); i++; return v; }
     if (s[i] === '-') { i++; return -prim(); }
     const num = /^\d*\.?\d+/.exec(s.slice(i)); if (num) { i += num[0].length; return +num[0]; }
     const str = /^"([^"]*)"/.exec(s.slice(i)); if (str) { i += str[0].length; return str[1]; }
     const id = /^[a-z_][a-z0-9_]*/i.exec(s.slice(i));
     if (id) {
       i += id[0].length; ws();
-      if (s[i] === '(') { i++; const args = []; ws(); if (s[i] !== ')') { args.push(add()); ws(); while (s[i] === ',') { i++; args.push(add()); ws(); } } if (s[i] !== ')') throw new Error('missing )'); i++;
+      if (s[i] === '(') { i++; const args = []; ws(); if (s[i] !== ')') { args.push(tern()); ws(); while (s[i] === ',') { i++; args.push(tern()); ws(); } } if (s[i] !== ')') throw new Error('missing )'); i++;
         if (id[0] === 'pick') { const k = args[0]; return args[1 + k]; }
         if (!FN[id[0]]) throw new Error(`unknown function ${id[0]}()`); return FN[id[0]](...args); }
       if (!(id[0] in vars)) throw new Error(`unknown param "${id[0]}"`);
@@ -204,7 +208,7 @@ function applyParams(src, overrides, errors) {
       try { Object.keys(vars).forEach(k => { if (new RegExp(`\\b${k}\\b`).test(e)) used.add(k); }); return fmtNum(evalExpr(e, vars, i + 1)); }
       catch (err) { errors.push({ line: i + 1, level: 'error', msg: `In \${${e}}: ${err.message}` }); return '0'; }
     });
-    c = c.replace(/(^|[\s=])((?:[\d.]+(?:in|cm)?)(?:\/[\d.]+(?:in|cm)?)+)(?=\s|$|;)/g, (m0, pre, list) => {
+    c = c.replace(/(^|[\s=:])((?:[\d.]+(?:in|cm)?)(?:\/[\d.]+(?:in|cm)?)+)(?=\s|$|;)/g, (m0, pre, list) => {
       const vals = list.split('/');
       if (!sizeP) { errors.push({ line: i + 1, level: 'error', msg: `Per-size list "${list}" needs a size param, e.g. param size enum ${vals.map((_, k) => 'S' + (k + 1)).join(' ')}` }); return pre + vals[0]; }
       used.add(sizeP.name);
@@ -395,8 +399,9 @@ function parseMods(t, line) {
       mods.push({ op: 'dec_every', n }); i += 3; continue;
     }
     if ((w === 'inc' || w === 'dec') && (t[i + 1] === 'edges' || t[i + 1] === 'neck')) {
+      const where = t[i + 1];
       let n = 1; if (/^\d+$/.test(t[i + 2] || '')) { n = +t[i + 2]; i++; }
-      mods.push({ op: w, where: t[i + 1], n }); i += 2; continue;
+      mods.push({ op: w, where, n }); i += 2; continue;
     }
     if (w === 'bind_off' && t[i + 1] === 'center') {
       const n = parseInt(t[i + 2]); if (!(n > 0)) fail(line, 'bind_off center N');
@@ -747,6 +752,10 @@ function placePiece(P, mesh, at, built, neckRef) {
       const span = 300 * Math.PI / 180, Wd = (hi - lo + 1) / built.sg, R = Wd / span, rc = (lo + hi) / 2 / built.sg;
       const th = (x - rc) / R;
       w = [0, 1, 2].map(q => S[q] + d[q] * along + R * (nrm[q] * Math.cos(th) + a[q] * Math.sin(th)));
+    } else if (at === 'torso') { // a tube around the body, hanging from the shoulders
+      const circ = mesh.W / built.sg; const R = Math.max(circ / (2 * Math.PI), 6.5) + 0.5;
+      const phi = -Math.PI / 2 + 2 * Math.PI * (mesh.us ? mesh.us[k] : (x - mesh.x0 / built.sg) / circ);
+      w = [R * Math.sin(phi), topY - Hin + y, R * Math.cos(phi) * 0.75];
     } else if (at === 'neck' || at === 'head') { // rings: cylinder, x around, rows up
       const circ = mesh.W / built.sg; const R = circ / (2 * Math.PI);
       const phi = -Math.PI / 2 + 2 * Math.PI * (mesh.us ? mesh.us[k] : (x - mesh.x0 / built.sg) / circ);
@@ -810,14 +819,17 @@ function samplePath(segs, t) {
   }
 }
 
+// v2 spots, roughly: tubes around the torso, fronts on the front, hands on the arms, the rest on the table
+const SPOT_MAP = { front_left: 'front', front_right: 'front', shoulders: 'front', left_hand: 'left_arm', right_hand: 'right_arm', left_foot: 'table', right_foot: 'table', waist: 'torso', left_leg: 'table', right_leg: 'table', crotch: 'table' };
+
 // ---------- Cloth simulation ----------
 function makeSim(doc) {
   const built = doc.built; const parts = [];
   let N = 0;
   built.order.forEach(P => {
-    const at = doc.placed[P.name]; if (!at || !P.nrows) return;
-    const mesh = buildMesh(built, P);
-    const pos0 = placePiece(P, mesh, at, built);
+    const at = SPOT_MAP[doc.placed[P.name]] || doc.placed[P.name]; if (!at || !P.nrows) return;
+    const mesh = buildMesh(pv(built, P), P);
+    const pos0 = placePiece(P, mesh, at, pv(built, P));
     parts.push({ P, mesh, offset: N, pos0, at }); N += mesh.local.length;
   });
   const partOf = {}; parts.forEach(p => partOf[p.P.name] = p);
@@ -848,7 +860,7 @@ function makeSim(doc) {
     if (!p.P.gather) return;
     let vs;
     if (p.mesh.band) { const m = p.mesh; vs = []; for (let i = 0; i <= m.nx; i++) vs.push(m.ny * (m.nx + 1) + i + p.offset); }
-    else { const pts = edgeOf(built, `${p.P.name}.top`)[0].pts; vs = [...new Set(pts.map(q => nearestVert(p.mesh, q) + p.offset))]; }
+    else { const pts = engineEdgeOf(built, `${p.P.name}.top`)[0].pts; vs = [...new Set(pts.map(q => nearestVert(p.mesh, q) + p.offset))]; }
     gathers.push(Int32Array.from(vs));
   });
   const S = new Int32Array(seamPairs); const ST = new Float32Array(pairStage);
@@ -961,14 +973,14 @@ function makeSim(doc) {
 }
 
 function run(src, overrides) {
-  const perrs = [];
-  const pp = applyParams(src, overrides || {}, perrs);
-  const doc = parse(pp.src);
-  doc.params = pp.params; doc.expanded = pp.src; doc.errors.push(...perrs);
-  build(doc);
-  check(doc);
+  const doc = buildDoc(src, overrides || {});
+  try { assemble(doc, doc.G); } catch (e) { doc.errors.push({ line: 0, msg: 'Internal error: ' + e.message, level: 'error' }); console.error(e); }
+  delete doc.G;
+  const seen = new Set(); doc.errors = doc.errors.filter((e) => { const k = `${e.line}|${e.level}|${e.msg}`; if (seen.has(k)) return false; seen.add(k); return true; });
   doc.errors.sort((a, b) => (a.line || 0) - (b.line || 0));
   return doc;
 }
+// each piece has its own gauge: mesh and placement read it from a per-piece view of `built`
+const pv = (built, P) => ({ ...built, sg: P.sg, rg: P.rg });
 
-export { applyParams, evalExpr, parse, build, check, run, edgeOf, edgeLen, buildMesh, makeSim, BODY, TABLE, fabricDesc };
+export { applyParams, evalExpr, parse, build, check, run, engineEdgeOf as edgeOf, edgeLen, buildMesh, makeSim, BODY, TABLE, fabricDesc };
