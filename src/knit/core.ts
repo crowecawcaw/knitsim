@@ -864,6 +864,66 @@ function makeSim(doc) {
     gathers.push(Int32Array.from(vs));
   });
   const S = new Int32Array(seamPairs); const ST = new Float32Array(pairStage);
+  // ---- self-collision: cloth may not pass through cloth ----
+  // particles closer than SELF_R repel, unless they are neighbours in the knitted fabric
+  // (same piece, close in rest layout) or both sit by a seam / gather that pulls them together.
+  const SELF_R = 0.6, EXCL2 = (SELF_R * 2.1) ** 2;
+  const partIdx = new Int32Array(N), restX = new Float32Array(N), restY = new Float32Array(N);
+  // round pieces: x is measured around the tube (u × circumference) so distances wrap past the start
+  const circOf = parts.map(p => p.mesh.round ? p.mesh.W / pv(built, p.P).sg : 0);
+  parts.forEach((p, pi) => p.mesh.local.forEach((l, k) => { partIdx[p.offset + k] = pi; restX[p.offset + k] = circOf[pi] ? p.mesh.us[k] * circOf[pi] : l.x; restY[p.offset + k] = l.y; }));
+  const restD2 = (i, j) => {
+    let dx = Math.abs(restX[i] - restX[j]); const c = circOf[partIdx[i]];
+    if (c) dx = Math.min(dx, c - dx);
+    return dx * dx + (restY[i] - restY[j]) ** 2;
+  };
+  // a seam or gather pulls distant fabric together; points near the same stretch of the same seam may touch
+  const zoneKeys = new Array(N).fill(null);
+  { const seeds = [];
+    for (let k = 0; k < seamPairs.length; k += 2) { seeds.push([seamPairs[k], k >> 1]); seeds.push([seamPairs[k + 1], k >> 1]); }
+    gathers.forEach((g, gi) => g.forEach(v => seeds.push([v, 1e6 * (gi + 1)])));
+    const byPart = new Map(); seeds.forEach(sd => { const pi = partIdx[sd[0]]; if (!byPart.has(pi)) byPart.set(pi, []); byPart.get(pi).push(sd); });
+    byPart.forEach((list, pi) => { const p = parts[pi], n = p.mesh.local.length;
+      for (let k = 0; k < n; k++) { const v = p.offset + k;
+        for (const [sv, key] of list) if (restD2(v, sv) < 2.6) (zoneKeys[v] ||= []).push(key); } }); }
+  const sameSeamStretch = (i, j) => {
+    const a = zoneKeys[i], b = zoneKeys[j]; if (!a || !b) return false;
+    // seam edges of two different pieces are meant to touch (several seams meet at an underarm)
+    if (partIdx[i] !== partIdx[j]) return true;
+    for (const x of a) for (const y of b) if (Math.abs(x - y) <= 2) return true;
+    return false;
+  };
+  const HS = 4093, hHead = new Int32Array(HS), hNext = new Int32Array(N);
+  const cellKey = (x, y, z) => ((((x * 73856093) ^ (y * 19349663) ^ (z * 83492791)) % HS) + HS) % HS;
+  function selfCollide() {
+    hHead.fill(-1);
+    const inv = 1 / SELF_R;
+    for (let i = 0; i < N; i++) {
+      const k = cellKey(Math.floor(pos[i * 3] * inv), Math.floor(pos[i * 3 + 1] * inv), Math.floor(pos[i * 3 + 2] * inv));
+      hNext[i] = hHead[k]; hHead[k] = i;
+    }
+    const R2 = SELF_R * SELF_R;
+    for (let i = 0; i < N; i++) {
+      const ix = i * 3;
+      const cx = Math.floor(pos[ix] * inv), cy = Math.floor(pos[ix + 1] * inv), cz = Math.floor(pos[ix + 2] * inv);
+      for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) for (let oz = -1; oz <= 1; oz++) {
+        for (let j = hHead[cellKey(cx + ox, cy + oy, cz + oz)]; j >= 0; j = hNext[j]) {
+          if (j <= i) continue;
+          const jx = j * 3;
+          const dx = pos[jx] - pos[ix], dy = pos[jx + 1] - pos[ix + 1], dz = pos[jx + 2] - pos[ix + 2];
+          const d2 = dx * dx + dy * dy + dz * dz; if (d2 >= R2 || d2 < 1e-12) continue;
+          if (partIdx[i] === partIdx[j] && restD2(i, j) < EXCL2) continue;
+          if (sameSeamStretch(i, j)) continue;
+          const d = Math.sqrt(d2), f = 0.5 * (SELF_R - d) / d;
+          const mx = dx * f, my = dy * f, mz = dz * f;
+          pos[ix] -= mx; pos[ix + 1] -= my; pos[ix + 2] -= mz; pos[jx] += mx; pos[jx + 1] += my; pos[jx + 2] += mz;
+          // friction: the layers drag on each other instead of sliding freely
+          prev[ix] -= mx * 0.6; prev[ix + 1] -= my * 0.6; prev[ix + 2] -= mz * 0.6;
+          prev[jx] += mx * 0.6; prev[jx + 1] += my * 0.6; prev[jx + 2] += mz * 0.6;
+        }
+      }
+    }
+  }
   const useTable = parts.some(p => p.at === 'table');
   const centred = parts.filter(p => p.at === 'head');
   const nStages = doc.nStages || 1;
@@ -915,6 +975,7 @@ function makeSim(doc) {
         for (const v of vs) { pos[v * 3] += (cx - pos[v * 3]) * f; pos[v * 3 + 1] += (cy - pos[v * 3 + 1]) * f; pos[v * 3 + 2] += (cz - pos[v * 3 + 2]) * f; }
       } }
       if (it % 2 === 1 || it === iters - 1) collide();
+      if (it === (iters >> 1) || it === iters - 1) selfCollide();
     }
     // a head holds a hat centred: keep head-placed pieces on the head's axis (x, z)
     for (const p of centred) {
@@ -969,7 +1030,7 @@ function makeSim(doc) {
   function endGrab() { grab = null; }
   function reset() { time = 0; parts.forEach(p => pos.set(p.pos0, p.offset * 3)); prev.set(pos); }
   function seamGap() { let m = 0; for (let c = 0; c < S.length; c += 2) { const a = S[c] * 3, b = S[c + 1] * 3; m = Math.max(m, Math.hypot(pos[a] - pos[b], pos[a + 1] - pos[b + 1], pos[a + 2] - pos[b + 2])); } return m; }
-  return { parts, pos, step, reset, seamGap, startGrab, endGrab, get grab() { return grab; }, seams: S, useTable, stageOf, tGrav, nStages, settleT: tGrav + 6, nSeam: S.length / 2, get time() { return time; }, N };
+  return { parts, pos, step, reset, seamGap, restNear: (i, j) => (partIdx[i] === partIdx[j] && restD2(i, j) < EXCL2) || sameSeamStretch(i, j), startGrab, endGrab, get grab() { return grab; }, seams: S, useTable, stageOf, tGrav, nStages, settleT: tGrav + 6, nSeam: S.length / 2, get time() { return time; }, N };
 }
 
 function run(src, overrides) {
