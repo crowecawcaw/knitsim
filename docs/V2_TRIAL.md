@@ -402,3 +402,22 @@ UNCLEAR:
 - Cable phase that depends on knitted length; curved attachment lines; a second piece's live stitches knitted into a row;
   a casing left partly open; "until the yarn runs out"; double-knit drawn as two layers; steeks.
 - None of revision 3 is implemented; `overN`, `until worked` and `fabric` have not been tested by a translator.
+
+## Corpus 2 — round 3 test (after spec revision 3)
+
+| Pattern | r1 | r2 | r3 | Remaining |
+|---|---|---|---|---|
+| PAL Palindrome socks | ~80% | ~90% | ~90% | all r2 tags solved; `fabric` restart-vs-continue contradiction; `cut … to ROW` keeps or unravels? |
+| GOA Gothic Arches socks | – | ~85% | ~85% | no FAIL left; heel rejoin and foot length approximate |
+
+Solved in r3: heel-centre EOP (`fabric eop:hc`), KYOK (`key … in3`), cable across round start (`overN`), "same length as" (`match length`), per-size `let` in `${}`, `repeat until worked`, `expect … printed` for errata, pfb.
+
+Open for the next revision:
+- `fabric` text says the next row is row 1, the phase rule says it continues: pick one (and how `shift` interacts with a fabric already in force).
+- Forward `round_start at N` after a finished round: are the N stitches worked? (also "move sts without working them").
+- `cut A at R to R2`: are rows between kept or unravelled; must `at` be a row marker?
+- Does `|` in a written row create sections that persist for later `:SECTION` rows?
+- One-off `row "…"` vs sticky fabric still confuses translators.
+- "Knit to the midpoint and stop" without turning needs `hold` first.
+- Rib phase when one run crosses a section boundary.
+- "As they appear" after a chart's last row: does it cycle?
