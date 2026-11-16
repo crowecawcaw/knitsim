@@ -79,6 +79,17 @@ export function rowExtents(P: Piece) {
 export type XFn = (x: number, r: number) => number;
 export type YFn = (r: number) => number;
 
+/** Pixel position of stitches drawn by drawPiece with the same arguments. */
+export function pieceXY(P: Piece, ox: number, oy: number, sw: number, sh: number, stretch = false): { X: XFn; Y: YFn } {
+  let X: XFn = (x) => ox + (x - P.minx + 0.5) * sw;
+  if (stretch) {
+    const ext = rowExtents(P);
+    const W0 = Math.max(...ext.map((e) => e.w));
+    X = (x, r) => ox + ((x - ext[r].lo) / ext[r].w) * W0 * sw;
+  }
+  return { X, Y: (r) => oy + (P.nrows - 1 - r + 0.5) * sh };
+}
+
 /** ox, oy = pixel of (minx-0.5, top of last row); sw, sh = px per stitch / row */
 export function drawPiece(ctx: Ctx, P: Piece, ox: number, oy: number, sw: number, sh: number,
   opts: { side?: Side; stretch?: boolean; progress?: number | null } = {}): { X: XFn; Y: YFn } {

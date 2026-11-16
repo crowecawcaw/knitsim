@@ -2,9 +2,9 @@
 // Imperative three.js code; React drives it through the public methods.
 import * as THREE from 'three';
 import { BODY, TABLE, makeSim, type KnitDoc, type Piece, type Stitch } from '../knit';
-import { drawOverlay, drawPiece, rowExtents, type Side } from '../draw/stitches';
+import { drawOverlay, pieceXY, rowExtents } from '../draw/stitches';
 import type { ViewMode } from '../urlState';
-import { YarnPart, yarnMaterial, type YarnLod } from './yarn';
+import { fabricMaterials, setFabricState, type FabricMats } from './fabric';
 
 // Match the look of the original (three r147, legacy lighting): hex colours are
 // used as-is and lights are scaled from the old intensity units.
@@ -25,9 +25,9 @@ interface Fade { v: number; t: number; mats: THREE.Material[]; base: number[] }
 type Sim = any; // returned by makeSim (untyped engine)
 interface Part {
   P: Piece; mesh: any; offset: number; idx: number;
-  canvas: Record<Side, HTMLCanvasElement>; tex: Record<Side, THREE.CanvasTexture>; scratch?: HTMLCanvasElement;
+  canvas: HTMLCanvasElement; tex: THREE.CanvasTexture;
   g: THREE.BufferGeometry; attr: THREE.BufferAttribute; meshes: THREE.Mesh[]; flatBox: Box;
-  yarn: YarnPart;
+  fab: FabricMats; shells: THREE.Mesh[];
 }
 
 export interface SceneCallbacks {
@@ -64,7 +64,7 @@ export class KnitScene {
   private insets: Insets = { l: 0, r: 0, t: 0, b: 0 };
   private simRunning = false; private simT = 0; private relaxUntil = 0; private lastT = 0;
   private raf = 0;
-  private yarnMat = yarnMaterial(); private yarnLod: YarnLod = 'off';
+  private fuzzOn = false;
   private cleanup: (() => void)[] = [];
 
   constructor(private host: HTMLElement, private statusEl: HTMLElement, private cb: SceneCallbacks) {
@@ -128,7 +128,6 @@ export class KnitScene {
     cancelAnimationFrame(this.raf);
     this.cleanup.forEach((f) => f());
     this.disposeGroup();
-    this.yarnMat.dispose();
     this.R.dispose();
     this.R.domElement.remove();
   }
@@ -206,19 +205,14 @@ export class KnitScene {
       const n = part.mesh.local.length;
       const attr = new THREE.BufferAttribute(sim.pos.subarray(part.offset * 3, (part.offset + n) * 3), 3); attr.setUsage(THREE.DynamicDrawUsage);
       g.setAttribute('position', attr); g.setAttribute('uv', new THREE.Float32BufferAttribute(part.mesh.uv, 2)); g.setIndex(part.mesh.tris);
-      part.canvas = { RS: document.createElement('canvas'), WS: document.createElement('canvas') };
-      part.tex = {} as Part['tex'];
-      (['RS', 'WS'] as Side[]).forEach((sd) => {
-        const t = new THREE.CanvasTexture(part.canvas[sd]); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; part.tex[sd] = t;
-      });
-      this.drawTexture(part, 'RS'); this.drawTexture(part, 'WS');
-      const mF = new THREE.MeshStandardMaterial({ map: part.tex.RS, bumpMap: part.tex.RS, bumpScale: 0.25, roughness: 0.95, alphaTest: 0.4, side: THREE.FrontSide });
-      const mB = new THREE.MeshStandardMaterial({ map: part.tex.WS, bumpMap: part.tex.WS, bumpScale: 0.25, roughness: 0.95, alphaTest: 0.4, side: THREE.BackSide, color: 0xe6dccd });
-      const a = new THREE.Mesh(g, mF), b = new THREE.Mesh(g, mB); a.userData.part = b.userData.part = part;
-      this.group!.add(a, b); Object.assign(part, { g, attr, meshes: [a, b], idx });
-      part.yarn = new YarnPart(part.P, part.mesh, part.offset, doc.built.sg, doc.built.rg, this.yarnMat);
-      part.yarn.setState(...this.yarnState(part.P));
-      this.group!.add(part.yarn.meshes.hi, part.yarn.meshes.lo);
+      // the overlay (needles, the picked stitch) is drawn in 2D; the fabric itself is a shader
+      part.canvas = document.createElement('canvas');
+      part.tex = new THREE.CanvasTexture(part.canvas); part.tex.anisotropy = 8;
+      const fm = fabricMaterials(part.P, part.mesh, doc.built.sg, doc.built.rg, part.tex);
+      const a = new THREE.Mesh(g, fm.cloth); a.userData.part = part;
+      const shells = fm.shells.map((m) => { const sh = new THREE.Mesh(g, m); sh.raycast = () => {}; sh.renderOrder = 1; sh.visible = this.fuzzOn; return sh; });
+      this.group!.add(a, ...shells); Object.assign(part, { g, attr, meshes: [a], idx, fab: fm, shells });
+      this.drawTexture(part);
       // label on the mat
       const lc = document.createElement('canvas'); lc.width = 512; lc.height = 96; const lx = lc.getContext('2d')!;
       lx.fillStyle = 'rgba(35,32,29,0.88)'; lx.font = '800 44px Nunito, sans-serif'; lx.fillText(part.P.name.replace(/_/g, ' '), 6, 46);
@@ -279,7 +273,7 @@ export class KnitScene {
   }
 
   private markDirty() {
-    this.parts.forEach((p) => { p.attr.needsUpdate = true; p.g.computeVertexNormals(); p.g.computeBoundingSphere(); p.yarn.dirty = true; });
+    this.parts.forEach((p) => { p.attr.needsUpdate = true; p.g.computeVertexNormals(); p.g.computeBoundingSphere(); });
   }
 
   // ---------- textures ----------
@@ -290,38 +284,31 @@ export class KnitScene {
     return { pxS, pxR: (pxS * sg) / rg };
   }
 
-  private drawTexture(part: Part, side: Side) {
+  private drawTexture(part: Part) {
     const P = part.P, mesh = part.mesh; const { pxS, pxR } = this.texSize(P);
     const { curPiece, progress, selected } = this.knit;
+    const isCur = P.name === curPiece; const inProgress = isCur && progress < P.total;
+    const sel = selected && selected.piece === P.name ? selected : null;
+    setFabricState(part.fab, inProgress ? progress : null, sel ? sel.ord : null);
+    const on = inProgress || !!sel;
+    (part.fab.cloth.uniforms.uOvOn as THREE.IUniform).value = on ? 1 : 0;
+    if (!on) return;
     const W = Math.ceil(mesh.W * pxS), H = Math.ceil(mesh.H * pxR);
-    const cv = part.canvas[side]; if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+    const cv = part.canvas; if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; part.tex.dispose(); }
     const ctx = cv.getContext('2d')!; ctx.clearRect(0, 0, W, H);
     const ox = (P.minx - 0.5 - mesh.x0) * pxS, oy = H - P.nrows * pxR;
-    const isCur = P.name === curPiece; const inProgress = isCur && progress < P.total;
-    const src = part.scratch || (part.scratch = document.createElement('canvas')); src.width = W; src.height = H;
-    const sctx = src.getContext('2d')!; sctx.clearRect(0, 0, W, H);
-    const geo = drawPiece(sctx, P, ox, oy, pxS, pxR, { side, stretch: !!mesh.band, progress: inProgress ? progress : null });
-    if (!inProgress) { // bleed whole-stitch copies under cut mesh edges
-      const bx = mesh.band ? 0 : mesh.cs + 1, by = mesh.cr + 1;
-      for (let r = by; r >= 1; r--) { ctx.drawImage(src, 0, r * pxR); ctx.drawImage(src, 0, -r * pxR); }
-      ctx.globalCompositeOperation = 'destination-over';
-      for (let c = 1; c <= bx; c++) for (let r = -by; r <= by; r++) { ctx.drawImage(src, c * pxS, r * pxR); ctx.drawImage(src, -c * pxS, r * pxR); }
-      ctx.globalCompositeOperation = 'source-over';
-    }
-    ctx.drawImage(src, 0, 0);
-    if (side === 'RS' && (isCur || (selected && selected.piece === P.name))) {
-      // in a band texture each row is stretched to full width, so stitch width varies by row
-      const ext = mesh.band ? rowExtents(P).map((e) => e.w) : null;
-      const W0 = ext ? Math.max(...ext) : 0;
-      const swFor = (r: number) => (ext ? (pxS * W0) / ext[Math.max(0, Math.min(P.nrows - 1, r))] : pxS);
-      drawOverlay(ctx, P, isCur ? progress : Infinity, selected, geo.X, geo.Y, swFor, pxR);
-    }
-    part.tex[side].needsUpdate = true;
+    const geo = pieceXY(P, ox, oy, pxS, pxR, !!mesh.band);
+    // in a band texture each row is stretched to full width, so stitch width varies by row
+    const ext = mesh.band ? rowExtents(P).map((e) => e.w) : null;
+    const W0 = ext ? Math.max(...ext) : 0;
+    const swFor = (r: number) => (ext ? (pxS * W0) / ext[Math.max(0, Math.min(P.nrows - 1, r))] : pxS);
+    drawOverlay(ctx, P, isCur ? progress : Infinity, selected, geo.X, geo.Y, swFor, pxR);
+    part.tex.needsUpdate = true;
   }
 
   private refreshTexture(name: string) {
     const part = this.parts.find((p) => p.P.name === name);
-    if (part) { this.drawTexture(part, 'RS'); this.drawTexture(part, 'WS'); part.yarn.setState(...this.yarnState(part.P)); }
+    if (part) this.drawTexture(part);
   }
 
   // ---------- camera ----------
@@ -461,27 +448,17 @@ export class KnitScene {
       this.seamMat.opacity = this.mode === 'pieces' ? 0.3 : 0.85;
     }
     if (this.dirtyTex.size && this.parts.length) { this.dirtyTex.forEach((n) => this.refreshTexture(n)); this.dirtyTex.clear(); }
-    this.updateYarn(h);
+    this.updateFuzz(h);
     R.render(this.scene, this.camera);
   }
 
-  private yarnState(P: Piece): [number | null, number | null] {
-    const { curPiece, progress, selected } = this.knit;
-    return [P.name === curPiece && progress < P.total ? progress : null, selected && selected.piece === P.name ? selected.id : null];
-  }
-
-  /** Real yarn when stitches are big enough on screen to read; the flat texture alone when they are not. */
-  private updateYarn(hPx: number) {
-    if (!this.doc || !this.sim) return;
+  /** Stray fibres only show when stitches are big enough on screen to see them. */
+  private updateFuzz(hPx: number) {
+    if (!this.doc) return;
     const pxPerIn = hPx / (2 * this.cam.dist * Math.tan((this.cam.fov * Math.PI) / 360));
-    const stitchPx = pxPerIn / this.doc.built.sg;
-    const lod: YarnLod = stitchPx < 2.5 ? 'off' : stitchPx < 9 ? 'lo' : 'hi';
-    if (lod !== this.yarnLod) {
-      this.yarnLod = lod;
-      // the cloth becomes the shadowed gaps between strands
-      this.parts.forEach((p) => p.meshes.forEach((m, i) => (m.material as THREE.MeshStandardMaterial).color.set(lod === 'off' ? (i ? 0xe6dccd : 0xffffff) : (i ? 0x6f665c : 0x7a7068))));
-    }
-    this.parts.forEach((p) => { p.yarn.setLod(lod); if (lod !== 'off' && p.yarn.dirty) p.yarn.update(this.sim.pos); });
+    const on = pxPerIn / this.doc.built.sg > 5;
+    if (on === this.fuzzOn) return;
+    this.fuzzOn = on; this.parts.forEach((p) => p.shells.forEach((m) => { m.visible = on; }));
   }
 
   private updateGrabDot() {
