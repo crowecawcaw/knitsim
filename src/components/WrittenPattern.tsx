@@ -7,12 +7,14 @@ interface Props {
   /** the source the doc was built from */
   code: string;
   panelOpen: boolean;
+  /** px covered by the header (t) and the phone sheet (b, r), measured */
+  insets: { t: number; b: number; r: number };
   onShowRow: (piece: string, row: number) => void;
   onGotoLine: (line: number) => void;
 }
 
 /** The pattern as a printed pattern reads: materials, each piece row by row, finishing. */
-export function WrittenPattern({ doc, code, panelOpen, onShowRow, onGotoLine }: Props) {
+export function WrittenPattern({ doc, code, panelOpen, insets, onShowRow, onGotoLine }: Props) {
   const prose = useMemo(() => toProse(doc, code), [doc, code]);
   const errs = doc.errors.filter((e) => e.level === 'error');
 
@@ -47,7 +49,7 @@ export function WrittenPattern({ doc, code, panelOpen, onShowRow, onGotoLine }: 
   );
 
   return (
-    <div className={'written' + (panelOpen ? ' with-panel' : '')}>
+    <div className={'written' + (panelOpen ? ' with-panel' : '')} style={{ paddingTop: insets.t + 12, paddingBottom: insets.b + 24, paddingRight: insets.r ? insets.r + 12 : undefined }}>
       <article className="wp">
         <header className="wp-head">
           <p className="wp-kicker">Written pattern</p>

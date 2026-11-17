@@ -2,7 +2,6 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import type { KnitDoc, Stitch } from '../knit';
 import { KnitScene, type KnitState } from '../scene/KnitScene';
 import type { ViewMode } from '../urlState';
-import { STACKED_QUERY } from '../layout';
 
 export interface ViewerHandle { fit: () => void; focusPiece: (name: string) => void }
 
@@ -14,12 +13,12 @@ interface Props {
   onPick: (st: Stitch) => void;
   /** the project cards are showing on the left */
   panelOpen: boolean;
-  /** the player is shrunk to a small pill */
-  dockMini: boolean;
+  /** px covered by the header (top) and the dock (bottom), measured */
+  chrome: { t: number; b: number; r: number };
 }
 
 /** Hosts the imperative three.js scene and forwards React state into it. */
-export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer({ doc, mode, showSeams, knit, onPick, panelOpen, dockMini }, ref) {
+export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer({ doc, mode, showSeams, knit, onPick, panelOpen, chrome }, ref) {
   const host = useRef<HTMLDivElement>(null);
   const status = useRef<HTMLDivElement>(null);
   const scene = useRef<KnitScene | null>(null);
@@ -36,17 +35,8 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer({ doc, mod
 
   // the view fills the window; keep the knit clear of the header, cards and dock floating over it
   useEffect(() => {
-    const s = scene.current; if (!s) return;
-    const mq = window.matchMedia(STACKED_QUERY);
-    const insets = () => {
-      const landscape = mq.matches && window.innerHeight < window.innerWidth;
-      if (!mq.matches) s.setInsets({ l: panelOpen ? 330 : 0, r: 0, t: 80, b: dockMini ? 90 : 130 });
-      else if (landscape) s.setInsets({ l: 0, r: 0, t: 56, b: dockMini ? 70 : 110 });
-      else s.setInsets({ l: 0, r: 0, t: 120, b: dockMini ? 90 : 130 });
-    };
-    insets(); mq.addEventListener('change', insets); window.addEventListener('resize', insets);
-    return () => { mq.removeEventListener('change', insets); window.removeEventListener('resize', insets); };
-  }, [panelOpen, dockMini]);
+    scene.current?.setInsets({ l: panelOpen ? 330 : 0, r: chrome.r ? chrome.r + 8 : 0, t: chrome.t + 4, b: chrome.b + 8 });
+  }, [panelOpen, chrome]);
 
   // order matters: knit state first so the rebuilt textures include it
   useEffect(() => { scene.current?.setKnitState(knit); }, [knit]);
