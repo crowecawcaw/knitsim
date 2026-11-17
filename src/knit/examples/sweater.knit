@@ -5,7 +5,7 @@ source https://www.allfreeknitting.com/Knitted-Sweaters/Lazy-Sunday-Relaxed-Swea
 param size enum S M L 1X 2X 3X = S "Size"
 param sts float 8..13 = 10 "Your gauge: sts / 4in"
 param rows float 11..18 = 14 "Your gauge: rows / 4in"
-param main color = #c4a27a "Yarn"
+param main color = #3b6b58 "Yarn"
 
 gauge ${sts} sts x ${rows} rows = 4 in
 yarn ${main}

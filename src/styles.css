@@ -58,7 +58,10 @@ a { color: var(--acc); }
 
 /* ---------- stage: the knit is the hero ---------- */
 .stage { position: absolute; inset: 0; }
-#view3d { position: absolute; inset: 0; overflow: hidden; background: var(--bg); }
+/* a paper sweep behind the knit: lighter where the subject stands, falling off softly to the edges */
+#view3d { position: absolute; inset: 0; overflow: hidden; background:
+  radial-gradient(ellipse 60% 55% at 50% 40%, rgba(255,255,255,0.75), rgba(255,255,255,0) 70%),
+  radial-gradient(ellipse 120% 90% at 50% 35%, #f7f4ef 0%, #efe9e1 55%, #e2d9cd 100%); }
 #view3d canvas { display: block; }
 #simStatus { position: absolute; top: 80px; left: 50%; transform: translateX(-50%); max-width: min(560px, calc(100% - 32px)); font-size: 12.5px; color: var(--mut); background: rgba(255,255,255,0.7); border-radius: 999px; padding: 6px 14px; pointer-events: none; backdrop-filter: blur(8px); text-align: center; }
 
