@@ -17,6 +17,8 @@ export interface ProseStep {
   line: number;
   /** row index in the piece to show in the simulation */
   row?: number;
+  /** the first row the step works (for a repeat: the first row of its first repeat) */
+  from?: number;
   /** for a repeat: the steps to repeat */
   steps?: ProseStep[];
 }
@@ -194,7 +196,7 @@ function groupText(p: Piece, g: Group): string {
 function stepFor(p: Piece, g: Group, comment: string): ProseStep {
   return {
     kind: 'step', label: rowLabel(p, g.first, g.last), text: groupText(p, g),
-    count: g.count ? countText(g.count) : undefined, note: comment || undefined, line: g.first.line, row: g.last.index,
+    count: g.count ? countText(g.count) : undefined, note: comment || undefined, line: g.first.line, row: g.last.index, from: g.first.index,
   };
 }
 
@@ -223,6 +225,7 @@ function foldRepeats(p: Piece, gs: Group[], comments: Map<number, string>): Pros
       count: last.count ? countText(last.count) : undefined,
       line: gs[i].first.line,
       row: last.last.index,
+      from: gs[i].first.index,
       steps: cycle.map((g) => ({ ...stepFor(p, g, comments.get(g.first.line) ?? ''), count: undefined })),
     });
     i += k * m;
@@ -318,7 +321,7 @@ function pieceSteps(p: Piece, lines: SrcLine[], endLine: number, params: Param[]
   const steps: ProseStep[] = [];
   const co = p.rows[0];
   if (co && co.dir === 'CO') {
-    steps.push({ kind: 'step', text: castOnText(p, co, lines[co.line - 1]?.code ?? ''), note: comments.get(co.line), line: co.line, row: 0 });
+    steps.push({ kind: 'step', text: castOnText(p, co, lines[co.line - 1]?.code ?? ''), note: comments.get(co.line), line: co.line, row: 0, from: 0 });
   }
   const body = foldRepeats(p, groupRows(p.rows), comments);
 

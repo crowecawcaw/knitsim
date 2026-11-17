@@ -188,7 +188,9 @@ pre.ref { font: 12px/1.5 "IBM Plex Mono", monospace; white-space: pre-wrap; back
 
 /* ================================================================ knitter: the pattern is the page */
 .kv { position: fixed; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
-.kv-body { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 28px; padding: 24px 28px 48px; max-width: 1180px; width: 100%; margin: 0 auto; align-items: start; }
+.kv-body { flex: 1; min-height: 0; overflow: auto; }
+.kv-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 28px; padding: 24px 28px 55vh; max-width: 1180px; margin: 0 auto; align-items: start; }
+.kv-preview { top: 24px; }
 .kv-pattern { min-width: 0; }
 .kv-preview { position: sticky; top: 0; }
 .kv-stage { position: relative; height: 340px; border-radius: var(--r); overflow: hidden; box-shadow: var(--shadow); background: var(--card-solid); }
@@ -232,8 +234,9 @@ pre.ref { font: 12px/1.5 "IBM Plex Mono", monospace; white-space: pre-wrap; back
 .wp-steps { list-style: none; margin: 0; padding: 0; }
 .wp-line { display: flex; align-items: baseline; gap: 12px; padding: 7px 10px; margin: 0 -10px; border-radius: 12px; }
 .wp-step.pick > .wp-line { cursor: pointer; }
-.wp-step.pick > .wp-line:hover { background: rgba(0,0,0,0.035); }
+@media (hover: hover) { .wp-step.pick > .wp-line:hover { background: rgba(0,0,0,0.035); } }
 .wp-step.pick > .wp-line:focus-visible { outline: 2px solid var(--acc-ring); }
+.wp-step.here > .wp-line { background: rgba(138, 111, 209, 0.07); box-shadow: inset 3px 0 0 var(--acc-ring); }
 .wp-step.on > .wp-line { background: var(--acc-soft); box-shadow: inset 3px 0 0 var(--acc); }
 .wp-line p { margin: 0; flex: 1; min-width: 0; }
 .wp-label { font-weight: 800; }
@@ -279,7 +282,7 @@ pre.ref { font: 12px/1.5 "IBM Plex Mono", monospace; white-space: pre-wrap; back
   .bar { padding: 8px 10px; gap: 8px; }
   .bar-title h1, .title-input { font-size: 16px; }
   .bar .seg button { padding: 6px 10px; }
-  .kv-body { display: block; padding: 16px 16px 120px; }
+  .kv-grid { display: block; padding: 16px 16px 55vh; }
   /* the preview is a small card in the corner, over the pattern */
   .kv-preview { position: fixed; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); top: auto; width: 128px; z-index: 6; }
   .kv-stage { height: 128px; border-radius: 18px; box-shadow: 0 10px 30px -8px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,0,0,0.04); }
@@ -313,6 +316,7 @@ pre.ref { font: 12px/1.5 "IBM Plex Mono", monospace; white-space: pre-wrap; back
   html, body { background: #fff; height: auto; }
   .kv { position: static; }
   .bar, .kv-preview, .wp-yours, .wp-hint, .wp-words { display: none !important; }
-  .kv-body { display: block; overflow: visible; padding: 0; }
+  .kv-body { overflow: visible; }
+  .kv-grid { display: block; padding: 0; }
   .wp-step.on > .wp-line { background: none; box-shadow: none; }
 }

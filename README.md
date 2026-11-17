@@ -38,9 +38,10 @@ examples are seeded the first time the store is opened.
 A project opens in one of two interfaces:
 
 - **Knit** (default), for someone following the pattern: the written pattern is the page (rendered from the code by
-  `src/knit/prose.ts`), with their size and yarn at the top. Tapping a step shows it in plain words and shows the piece
-  as it looks after that step in a small preview; tapping the preview opens it full screen, where the arrows step
-  through the pattern and a stitch can be tapped to see how it's made.
+  `src/knit/prose.ts`), with their size and yarn at the top. Scrolling knits a small preview along with the reading:
+  the step a third of the way down the page, and how far through it you are, decide how many stitches are worked.
+  Tapping a step shows it in plain words (and holds the preview there until you scroll on); tapping the preview opens
+  it full screen, where the arrows step through the pattern and a stitch can be tapped to see how it's made.
 - **Design**, for someone writing the pattern: the simulation (assembled by default) with the player, and a side
   panel with Options, Code, Checks and Agent (editing by chat; not connected yet).
 

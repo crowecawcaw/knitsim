@@ -9,7 +9,7 @@ export function stopsOf(prose: Prose): Stop[] {
   const out: Stop[] = [];
   const walk = (steps: ProseStep[], piece: string, round: boolean, path: string) => steps.forEach((s, i) => {
     const id = `${path}.${i}`;
-    if (s.row !== undefined) out.push({ id, piece, row: s.row, label: s.label ?? '', text: s.text, round });
+    if (s.row !== undefined) out.push({ id, piece, row: s.row, label: s.label ?? (/^Pick up/.test(s.text) ? 'Pick up' : 'Cast on'), text: s.text, round });
     if (s.steps) walk(s.steps, piece, round, id);
   });
   prose.sections.forEach((sec, i) => walk(sec.steps, sec.piece, sec.round, String(i)));
@@ -22,18 +22,22 @@ interface Props {
   /** the knitter's own settings (size, yarn), shown with the materials */
   settings: ReactNode;
   selected: string | null;
+  /** the step at the reading line, while scrolling */
+  here: string | null;
   onSelect: (id: string) => void;
 }
 
 /** The pattern as a printed pattern reads, where each step can be tapped to see it and read it in plain words. */
-export function WrittenPattern({ prose, errors, settings, selected, onSelect }: Props) {
-  const step = (s: ProseStep, path: string, round: boolean) => {
+export function WrittenPattern({ prose, errors, settings, selected, here, onSelect }: Props) {
+  // `piece` is given for the top-level steps of a piece: those are the units scrolling knits through
+  const step = (s: ProseStep, path: string, round: boolean, piece?: string) => {
     const id = path;
     const on = selected === id;
     const pick = s.row !== undefined;
+    const unit = piece && pick ? { 'data-piece': piece, 'data-from': s.from ?? s.row, 'data-to': s.row } : {};
     const words = on ? spellOut(s.text, round) : null;
     return (
-      <li key={id} data-step={id} className={'wp-step wp-' + s.kind + (on ? ' on' : '') + (pick ? ' pick' : '')}>
+      <li key={id} data-step={id} {...unit} className={'wp-step wp-' + s.kind + (on ? ' on' : '') + (pick ? ' pick' : '') + (here === id ? ' here' : '')}>
         {s.kind === 'note'
           ? <p className="wp-note">{s.text}</p>
           : (
@@ -93,7 +97,7 @@ export function WrittenPattern({ prose, errors, settings, selected, onSelect }: 
         </section>
       )}
 
-      <p className="wp-hint">Tap any step to see the piece at that point and read it in plain words.</p>
+      <p className="wp-hint">As you scroll, the preview knits along with the pattern. Tap a step to read it in plain words.</p>
 
       {prose.sections.map((sec, i) => (
         <section key={sec.piece}>
@@ -101,7 +105,7 @@ export function WrittenPattern({ prose, errors, settings, selected, onSelect }: 
           <p className="wp-size">Finished piece: {sec.size}{sec.round ? ' · worked in the round' : ''}</p>
           {sec.like
             ? <p>Work as for the {sec.like}.</p>
-            : <ol className="wp-steps">{sec.steps.map((s, j) => step(s, `${i}.${j}`, sec.round))}</ol>}
+            : <ol className="wp-steps">{sec.steps.map((s, j) => step(s, `${i}.${j}`, sec.round, sec.piece))}</ol>}
         </section>
       ))}
 
