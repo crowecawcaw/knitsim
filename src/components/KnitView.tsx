@@ -172,7 +172,7 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
               <div className="kv-bigbottom">
                 <button className="icon-btn" aria-label="Previous step" disabled={idx === 0} onClick={() => go(-1)}><IconPrev /></button>
                 <div className="kv-bigtext">
-                  <strong className="cap">{pieceTitle}{stop ? ` · ${stop.label}` : ''}</strong>
+                  <strong><span className="cap">{pieceTitle}</span>{stop ? ` · ${stop.label}` : ''}</strong>
                   <p>{words ?? 'Step through the pattern with the arrows, or tap a stitch to see how it’s made.'}</p>
                 </div>
                 <button className="icon-btn" aria-label="Next step" disabled={idx >= stops.length - 1} onClick={() => go(1)}><IconNext /></button>
