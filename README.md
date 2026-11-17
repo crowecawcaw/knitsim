@@ -11,23 +11,48 @@ seam lengths, animates the knitting, and sews the pieces together in a 3D cloth 
 ```sh
 npm install
 npm run dev        # http://localhost:5173
-npm test           # vitest: examples parse cleanly, URL state round-trips
+npm test           # vitest: examples parse, prose, projects API, URL routes
 npm run typecheck
 npm run build      # → dist/
 ```
 
-Stack: React 19 + TypeScript + Vite, three.js for the 3D view. It is a single-page app with no backend.
+Stack: React 19 + TypeScript + Vite, three.js for the 3D view. It is a single-page app with no backend (yet: see Projects).
+
+## Projects
+
+The app opens on a project browser. Projects are stored in `localStorage` behind a small CRUD interface,
+`ProjectsApi` in `src/projects/api.ts`, shaped like the REST API it is meant to become:
+
+| Method | Would be |
+|---|---|
+| `list()` → `ProjectSummary[]` | `GET /projects` (newest first, no source, plus derived colours and piece names) |
+| `get(id)` → `Project` | `GET /projects/:id` |
+| `create(input)` → `Project` | `POST /projects` |
+| `update(id, patch)` → `Project` | `PATCH /projects/:id` (name, code, params) |
+| `remove(id)` | `DELETE /projects/:id` |
+
+All methods are async and return copies; a missing id rejects with `NotFoundError` (status 404). The app uses the
+single instance exported from `src/projects/index.ts`: swap `LocalProjectsApi` for an HTTP client there. The bundled
+examples are seeded the first time the store is opened.
+
+Inside a project there are two views: the 3D **simulation** (assembled by default) and the **written pattern**, the
+pattern rendered back into knitting prose by `src/knit/prose.ts`.
 
 ## URL state
 
-All state is kept in the query string, so you can share any view as a link:
+The route lives in the query string:
 
 | Param | Value |
 |---|---|
-| `code` | base64url (UTF-8) of the DSL source. Omitted when it's the default example |
-| `params` | base64url of a JSON object of parameter overrides, e.g. `{"size":"M"}` |
-| `mode` | `pieces` (default), `aligned` or `assembled` |
-| `tab` | `sim` (default), `pattern` or `checks` |
+| *(none)* | the project browser |
+| `p` | id of a saved project |
+| `code` | a shared pattern: base64url (UTF-8) of the DSL source. Opens unsaved, with a "Save to my projects" button |
+| `params` | with `code`: base64url of a JSON object of parameter overrides, e.g. `{"size":"M"}` |
+| `view` | `sim` (default) or `written` |
+| `mode` | `assembled` (default), `aligned` or `pieces` |
+| `drawer` | `code` or `checks` when the source drawer is open (old `tab=` links still work) |
+
+Projects live in one browser, so the share button copies a `code=` link.
 
 ## Layout
 
@@ -37,10 +62,12 @@ src/
     core.ts        engine (ported from the original single-file prototype; still untyped inside)
     types.ts       public shapes of the engine's output
     examples/      bundled .knit patterns
+    prose.ts       built pattern → written instructions
   draw/            2D canvas drawing: stitches, needles, the "how is it made" animation
   scene/           three.js scene (imperative; React drives it via KnitScene's methods)
   components/      React UI
-  urlState.ts      query-string <-> app state
+  projects/        ProjectsApi: CRUD interface + localStorage implementation
+  urlState.ts      query-string <-> route
 ```
 
 ## Deploys
