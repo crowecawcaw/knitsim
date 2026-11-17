@@ -310,7 +310,7 @@ function pieceSteps(p: Piece, lines: SrcLine[], endLine: number, params: Param[]
     const l = lines[ln - 1]; if (!l) continue;
     if (l.comment && l.code) comments.set(ln, l.comment);
     if (rowLines.has(ln)) continue;
-    if (!l.code && l.comment) { statements.push({ kind: 'note', text: sentence(l.comment), line: ln }); continue; }
+    if (!l.code && l.comment) { statements.push({ kind: 'note', text: cap(l.comment.replace(/\.$/, '')), line: ln }); continue; }
     const t = l.code && statementText(l.code, p, params);
     if (t) statements.push({ kind: 'step', text: t, line: ln, note: l.comment || undefined });
   }
@@ -355,7 +355,7 @@ function assembleSteps(lines: SrcLine[]): ProseStep[] {
     for (let i = start + 1; i < lines.length; i++) {
       const { code, comment } = lines[i];
       if (code === 'end') break;
-      if (!code && comment) { out.push({ kind: 'note', text: sentence(comment), line: i + 1 }); continue; }
+      if (!code && comment) { out.push({ kind: 'note', text: cap(comment.replace(/\.$/, '')), line: i + 1 }); continue; }
       const seam = /^seam\s+(.+?)\s*=\s*(.+)$/.exec(code);
       if (seam) {
         const [a, b] = [seam[1], seam[2]].map((s) => s.split(/\s*\+\s*/).map(edgeText).join(' and the '));
@@ -425,4 +425,63 @@ export function toProse(doc: KnitDoc, src: string): Prose {
   const abbreviations = ABBREVIATIONS.filter(([a]) => new RegExp(`(^|[^a-zA-Z])${a}(?![a-zA-Z])`, a.length <= 2 ? '' : 'i').test(all));
 
   return { title: doc.name, source: doc.source, intro, materials, sections, finishing, abbreviations };
+}
+
+// ---------------------------------------------------------------- plain words
+
+const FABRIC_GLOSS: [RegExp, (round: boolean) => string][] = [
+  [/reverse stockinette stitch/, (r) => r ? 'purl every round' : 'purl the right-side rows, knit the wrong-side rows'],
+  [/stockinette stitch/, (r) => r ? 'knit every round' : 'knit the right-side rows, purl the wrong-side rows'],
+  [/garter stitch/, (r) => r ? 'knit one round, purl the next' : 'knit every row'],
+  [/seed stitch/, () => 'knit 1, purl 1, then on the next row knit the purls and purl the knits'],
+  [/moss stitch/, () => 'knit 1, purl 1 for two rows, then swap: knit the purls and purl the knits for two rows'],
+];
+
+const WORDS: [RegExp, string][] = [
+  [/\bk2tog\b/gi, 'knit 2 together'],
+  [/\bk3tog\b/gi, 'knit 3 together'],
+  [/\bp2tog\b/gi, 'purl 2 together'],
+  [/\bssk\b/gi, 'slip, slip, knit (slip 2 stitches one at a time, then knit them together through the back)'],
+  [/\bm1l\b/gi, 'make 1 left'],
+  [/\bm1r\b/gi, 'make 1 right'],
+  [/\bm1\b/gi, 'make 1'],
+  [/\bkfb\b/gi, 'knit into the front and back of the stitch'],
+  [/\byo\b/gi, 'yarn over'],
+  [/\bsl(\d+)\b/gi, 'slip $1'],
+  [/\bk(\d+)\b/gi, 'knit $1'],
+  [/\bp(\d+)\b/gi, 'purl $1'],
+  [/\bk\b/g, 'knit'],
+  [/\bp\b/g, 'purl'],
+  [/\bsts\b/g, 'stitches'],
+  [/\bst\b/g, 'stitch'],
+  [/\brep\b/g, 'repeat'],
+  [/\bRnds\b/g, 'Rounds'],
+  [/\bRnd\b/g, 'Round'],
+  [/\(RS\)/g, '(right side)'],
+  [/\(WS\)/g, '(wrong side)'],
+  [/\bRS\b/g, 'right-side'],
+  [/\bWS\b/g, 'wrong-side'],
+  [/(\d)in\b/g, '$1 inches'],
+  [/(\d)cm\b/g, '$1 cm'],
+];
+
+/**
+ * The same instruction with every abbreviation written out, and each named stitch pattern explained:
+ * "*k6, k2tog; rep from * to end" → "Repeat “knit 6, knit 2 together” to the end of the round."
+ * Returns null when there is nothing to translate.
+ */
+export function spellOut(text: string, round: boolean): string | null {
+  let t = text;
+  // *A; rep from * to end → Repeat “A” to the end
+  t = t.replace(/\*([^*;]+); rep from \* to end/g, (_, a) => `repeat “${a.trim()}” to the end of the ${round ? 'round' : 'row'}`);
+  t = t.replace(/^(\w+) around/i, (_, a) => `${a} all the way around`);
+  t = t.replace(/Bind off all sts in pattern/, 'Bind off all the stitches, knitting the knits and purling the purls as they appear');
+  // rib: "k2, p2 rib" → "rib (knit 2, purl 2, ...)"
+  t = t.replace(/\bk(\d+), p(\d+) rib\b/g, (_, a, b) => `rib (knit ${a}, purl ${b} across; on later ${round ? 'rounds' : 'rows'} knit the knits and purl the purls)`);
+  for (const [re, gloss] of FABRIC_GLOSS) {
+    if (re.test(t)) { t = t.replace(re, (m) => `${m} (${gloss(round)})`); break; }
+  }
+  for (const [re, w] of WORDS) t = t.replace(re, w);
+  t = t.charAt(0).toUpperCase() + t.slice(1);
+  return t === text ? null : t;
 }

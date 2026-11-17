@@ -16,26 +16,28 @@ describe('url state', () => {
 
   it('omits view defaults; assembled is the default mode', () => {
     expect(serializeRoute({ page: 'project', id: 'abc', ...DEFAULT_VIEW })).toBe('?p=abc');
-    expect(parseRoute('?p=abc')).toEqual({ page: 'project', id: 'abc', view: 'sim', mode: 'assembled', drawer: null });
+    expect(parseRoute('?p=abc')).toEqual({ page: 'project', id: 'abc', ui: 'knit', mode: 'assembled', tab: 'options' });
   });
 
   it('round-trips a project route', () => {
-    const r: Route = { page: 'project', id: 'x1', view: 'written', mode: 'pieces', drawer: 'checks' };
+    const r: Route = { page: 'project', id: 'x1', ui: 'design', mode: 'pieces', tab: 'checks' };
     expect(parseRoute(serializeRoute(r))).toEqual(r);
   });
 
   it('round-trips a shared pattern', () => {
-    const r: Route = { page: 'shared', code: 'pattern "x"', params: { size: 'M', width: 9.5 }, view: 'sim', mode: 'aligned', drawer: 'code' };
+    const r: Route = { page: 'shared', code: 'pattern "x"', params: { size: 'M', width: 9.5 }, ui: 'design', mode: 'aligned', tab: 'code' };
     expect(parseRoute(serializeRoute(r))).toEqual(r);
   });
 
-  it('reads old tab= links as the drawer', () => {
+  it('opens older links in the designer', () => {
     const r = parseRoute('?code=' + encodeB64('x') + '&tab=pattern');
-    expect(r.page === 'shared' && r.drawer).toBe('code');
+    expect(r.page === 'shared' && [r.ui, r.tab]).toEqual(['design', 'code']);
+    const d = parseRoute('?p=a&drawer=checks');
+    expect(d.page === 'project' && [d.ui, d.tab]).toEqual(['design', 'checks']);
   });
 
   it('ignores garbage', () => {
     expect(parseRoute('?code=%%%')).toEqual({ page: 'browser' });
-    expect(parseRoute('?code=' + encodeB64('x') + '&params=bm90IGpzb24&mode=nope&view=1')).toEqual({ page: 'shared', code: 'x', params: {}, ...DEFAULT_VIEW });
+    expect(parseRoute('?code=' + encodeB64('x') + '&params=bm90IGpzb24&mode=nope&ui=1&tab=zz')).toEqual({ page: 'shared', code: 'x', params: {}, ...DEFAULT_VIEW });
   });
 });

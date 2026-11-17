@@ -1,105 +1,114 @@
-import { useMemo } from 'react';
-import type { KnitDoc } from '../knit';
-import { toProse, type ProseStep } from '../knit/prose';
+import type { ReactNode } from 'react';
+import { spellOut, type Prose, type ProseStep } from '../knit/prose';
 
-interface Props {
-  doc: KnitDoc;
-  /** the source the doc was built from */
-  code: string;
-  panelOpen: boolean;
-  /** px covered by the header (t) and the phone sheet (b, r), measured */
-  insets: { t: number; b: number; r: number };
-  onShowRow: (piece: string, row: number) => void;
-  onGotoLine: (line: number) => void;
+/** A step the knitter can select: it has a place in a piece to preview. */
+export interface Stop { id: string; piece: string; row: number; label: string; text: string; round: boolean }
+
+/** Every selectable step, in pattern order (ids match the ones WrittenPattern renders). */
+export function stopsOf(prose: Prose): Stop[] {
+  const out: Stop[] = [];
+  const walk = (steps: ProseStep[], piece: string, round: boolean, path: string) => steps.forEach((s, i) => {
+    const id = `${path}.${i}`;
+    if (s.row !== undefined) out.push({ id, piece, row: s.row, label: s.label ?? '', text: s.text, round });
+    if (s.steps) walk(s.steps, piece, round, id);
+  });
+  prose.sections.forEach((sec, i) => walk(sec.steps, sec.piece, sec.round, String(i)));
+  return out;
 }
 
-/** The pattern as a printed pattern reads: materials, each piece row by row, finishing. */
-export function WrittenPattern({ doc, code, panelOpen, insets, onShowRow, onGotoLine }: Props) {
-  const prose = useMemo(() => toProse(doc, code), [doc, code]);
-  const errs = doc.errors.filter((e) => e.level === 'error');
+interface Props {
+  prose: Prose;
+  errors: number;
+  /** the knitter's own settings (size, yarn), shown with the materials */
+  settings: ReactNode;
+  selected: string | null;
+  onSelect: (id: string) => void;
+}
 
-  const step = (s: ProseStep, piece: string | null, i: number) => (
-    <li key={i} className={'wp-step wp-' + s.kind}>
-      {s.kind === 'note'
-        ? <p className="wp-note">{s.text}</p>
-        : (
-          <>
-            <div className="wp-line">
-              <p>
-                {s.label && <strong className="wp-label">{s.label}: </strong>}
-                {s.text}
-                {s.note && <span className="wp-author"> — {s.note}</span>}
-              </p>
-              {s.count && <span className="wp-count">{s.count}</span>}
-              <span className="wp-tools">
-                {piece && s.row !== undefined && (
-                  <button className="wp-tool" title="Show this in the simulation" aria-label="Show in simulation" onClick={() => onShowRow(piece, s.row!)}>
-                    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12s-3.5 6.5-9.5 6.5S2.5 12 2.5 12z" fill="none" stroke="currentColor" strokeWidth="1.8" /><circle cx="12" cy="12" r="2.6" fill="none" stroke="currentColor" strokeWidth="1.8" /></svg>
-                  </button>
-                )}
-                {s.line > 0 && (
-                  <button className="wp-tool mono" title={`Line ${s.line} of the source`} aria-label={`Source line ${s.line}`} onClick={() => onGotoLine(s.line)}>{s.line}</button>
-                )}
-              </span>
-            </div>
-            {s.steps && <ol className="wp-steps wp-sub">{s.steps.map((c, j) => step(c, piece, j))}</ol>}
-          </>
-        )}
-    </li>
-  );
+/** The pattern as a printed pattern reads, where each step can be tapped to see it and read it in plain words. */
+export function WrittenPattern({ prose, errors, settings, selected, onSelect }: Props) {
+  const step = (s: ProseStep, path: string, round: boolean) => {
+    const id = path;
+    const on = selected === id;
+    const pick = s.row !== undefined;
+    const words = on ? spellOut(s.text, round) : null;
+    return (
+      <li key={id} data-step={id} className={'wp-step wp-' + s.kind + (on ? ' on' : '') + (pick ? ' pick' : '')}>
+        {s.kind === 'note'
+          ? <p className="wp-note">{s.text}</p>
+          : (
+            <>
+              <div
+                className="wp-line"
+                {...(pick ? { role: 'button', tabIndex: 0, 'aria-pressed': on, onClick: () => onSelect(id), onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(id); } } } : {})}
+              >
+                <p>
+                  {s.label && <strong className="wp-label">{s.label}: </strong>}
+                  {s.text}
+                  {s.note && <span className="wp-author"> — {s.note}</span>}
+                </p>
+                {s.count && <span className="wp-count">{s.count}</span>}
+              </div>
+              {words && <p className="wp-words"><span>In plain words</span>{words}</p>}
+              {s.steps && <ol className="wp-steps wp-sub">{s.steps.map((c, j) => step(c, `${id}.${j}`, round))}</ol>}
+            </>
+          )}
+      </li>
+    );
+  };
 
   return (
-    <div className={'written' + (panelOpen ? ' with-panel' : '')} style={{ paddingTop: insets.t + 12, paddingBottom: insets.b + 24, paddingRight: insets.r ? insets.r + 12 : undefined }}>
-      <article className="wp">
-        <header className="wp-head">
-          <p className="wp-kicker">Written pattern</p>
-          <h1>{prose.title || 'Untitled pattern'}</h1>
-          {prose.source && <p className="wp-src">Adapted from <a href={prose.source} target="_blank" rel="noopener">{prose.source.replace(/^https?:\/\/(www\.)?/, '').replace(/\/.*$/, '')}</a></p>}
-          {prose.intro.length > 0 && <p className="wp-intro">{prose.intro.join(' ')}</p>}
-          <button className="soft-btn wp-print" onClick={() => window.print()}>Print</button>
-        </header>
+    <article className="wp">
+      <header className="wp-head">
+        <h1>{prose.title || 'Untitled pattern'}</h1>
+        {prose.source && <p className="wp-src">Adapted from <a href={prose.source} target="_blank" rel="noopener">{prose.source.replace(/^https?:\/\/(www\.)?/, '').replace(/\/.*$/, '')}</a></p>}
+        {prose.intro.length > 0 && <p className="wp-intro">{prose.intro.join(' ')}</p>}
+      </header>
 
-        {errs.length > 0 && (
-          <p className="wp-warn">The pattern source has {errs.length} error{errs.length > 1 ? 's' : ''}, so parts of these instructions may be missing.{' '}
-            <button className="linkish" onClick={() => onGotoLine(errs[0].line)}>Show the first one</button></p>
-        )}
+      {errors > 0 && <p className="wp-warn">This pattern has {errors} error{errors > 1 ? 's' : ''} in its source, so parts of these instructions may be missing.</p>}
 
+      <section className="wp-yours">
+        <h2>Your version</h2>
+        {settings}
+      </section>
+
+      <section>
+        <h2>Materials</h2>
+        <dl className="wp-materials">
+          {prose.materials.filter((m) => m.label !== 'Size').map((m) => (
+            <div key={m.label}>
+              <dt>{m.label}</dt>
+              <dd>{m.color && <span className="wp-swatch" style={{ background: m.color }} />}{m.value}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+
+      {prose.abbreviations.length > 0 && (
         <section>
-          <h2>Materials</h2>
-          <dl className="wp-materials">
-            {prose.materials.map((m) => (
-              <div key={m.label}>
-                <dt>{m.label}</dt>
-                <dd>{m.color && <span className="wp-swatch" style={{ background: m.color }} />}{m.value}</dd>
-              </div>
-            ))}
+          <h2>Abbreviations</h2>
+          <dl className="wp-abbr">
+            {prose.abbreviations.map(([a, m]) => <div key={a}><dt>{a}</dt><dd>{m}</dd></div>)}
           </dl>
         </section>
+      )}
 
-        {prose.abbreviations.length > 0 && (
-          <section>
-            <h2>Abbreviations</h2>
-            <dl className="wp-abbr">
-              {prose.abbreviations.map(([a, m]) => <div key={a}><dt>{a}</dt><dd>{m}</dd></div>)}
-            </dl>
-          </section>
-        )}
+      <p className="wp-hint">Tap any step to see the piece at that point and read it in plain words.</p>
 
-        {prose.sections.map((sec) => (
-          <section key={sec.piece}>
-            <h2>{sec.title}</h2>
-            <p className="wp-size">Finished piece: {sec.size}{sec.round ? ' · worked in the round' : ''}</p>
-            {sec.like
-              ? <p>Work as for the {sec.like}.</p>
-              : <ol className="wp-steps">{sec.steps.map((s, i) => step(s, sec.piece, i))}</ol>}
-          </section>
-        ))}
-
-        <section>
-          <h2>Finishing</h2>
-          <ol className="wp-steps">{prose.finishing.map((s, i) => step(s, null, i))}</ol>
+      {prose.sections.map((sec, i) => (
+        <section key={sec.piece}>
+          <h2>{sec.title}</h2>
+          <p className="wp-size">Finished piece: {sec.size}{sec.round ? ' · worked in the round' : ''}</p>
+          {sec.like
+            ? <p>Work as for the {sec.like}.</p>
+            : <ol className="wp-steps">{sec.steps.map((s, j) => step(s, `${i}.${j}`, sec.round))}</ol>}
         </section>
-      </article>
-    </div>
+      ))}
+
+      <section>
+        <h2>Finishing</h2>
+        <ol className="wp-steps">{prose.finishing.map((s, j) => step(s, `f.${j}`, false))}</ol>
+      </section>
+    </article>
   );
 }

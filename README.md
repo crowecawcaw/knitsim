@@ -35,8 +35,14 @@ All methods are async and return copies; a missing id rejects with `NotFoundErro
 single instance exported from `src/projects/index.ts`: swap `LocalProjectsApi` for an HTTP client there. The bundled
 examples are seeded the first time the store is opened.
 
-Inside a project there are two views: the 3D **simulation** (assembled by default) and the **written pattern**, the
-pattern rendered back into knitting prose by `src/knit/prose.ts`.
+A project opens in one of two interfaces:
+
+- **Knit** (default), for someone following the pattern: the written pattern is the page (rendered from the code by
+  `src/knit/prose.ts`), with their size and yarn at the top. Tapping a step shows it in plain words and shows the piece
+  as it looks after that step in a small preview; tapping the preview opens it full screen, where the arrows step
+  through the pattern and a stitch can be tapped to see how it's made.
+- **Design**, for someone writing the pattern: the simulation (assembled by default) with the player, and a side
+  panel with Options, Code, Checks and Agent (editing by chat; not connected yet).
 
 ## URL state
 
@@ -48,9 +54,11 @@ The route lives in the query string:
 | `p` | id of a saved project |
 | `code` | a shared pattern: base64url (UTF-8) of the DSL source. Opens unsaved, with a "Save to my projects" button |
 | `params` | with `code`: base64url of a JSON object of parameter overrides, e.g. `{"size":"M"}` |
-| `view` | `sim` (default) or `written` |
-| `mode` | `assembled` (default), `aligned` or `pieces` |
-| `drawer` | `code` or `checks` when the source drawer is open (old `tab=` links still work) |
+| `ui` | `knit` (default) or `design` |
+| `mode` | designer's 3D layout: `assembled` (default), `aligned` or `pieces` |
+| `tab` | designer's side panel: `options` (default), `code`, `checks` or `agent` |
+
+Older links still open: `drawer=code|checks` and `tab=pattern|checks` go to the designer on that tab.
 
 Projects live in one browser, so the share button copies a `code=` link.
 
@@ -65,7 +73,7 @@ src/
     prose.ts       built pattern → written instructions
   draw/            2D canvas drawing: stitches, needles, the "how is it made" animation
   scene/           three.js scene (imperative; React drives it via KnitScene's methods)
-  components/      React UI
+  components/      React UI: KnitView (knitter), DesignView (designer), ProjectBrowser
   projects/        ProjectsApi: CRUD interface + localStorage implementation
   urlState.ts      query-string <-> route
 ```

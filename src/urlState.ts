@@ -6,22 +6,23 @@
 //     &params=<base64url(JSON)>    its parameter overrides
 //
 // Project views also take:
-//   &view=sim|written              3D simulation (default) or the written pattern
-//   &mode=pieces|aligned|assembled 3D layout (default: assembled)
-//   &drawer=code|checks            the source drawer, when open
+//   &ui=knit|design                the knitter's pattern view (default) or the designer's workbench
+//   &mode=pieces|aligned|assembled designer's 3D layout (default: assembled)
+//   &tab=options|code|checks|agent designer's side panel (default: options)
 //
-// Defaults are omitted to keep links short. Old links with `tab=pattern|checks` open the drawer.
+// Defaults are omitted to keep links short. Older links still open: view=written → knit,
+// drawer=code|checks and tab=pattern|checks → the designer on that tab.
 
 import type { ParamValues } from './knit';
 
 export type ViewMode = 'pieces' | 'aligned' | 'assembled';
-export type View = 'sim' | 'written';
-export type Drawer = 'code' | 'checks' | null;
+export type Ui = 'knit' | 'design';
+export type DesignTab = 'options' | 'code' | 'checks' | 'agent';
 
 export interface ViewState {
-  view: View;
+  ui: Ui;
   mode: ViewMode;
-  drawer: Drawer;
+  tab: DesignTab;
 }
 
 export type Route =
@@ -30,9 +31,9 @@ export type Route =
   | ({ page: 'shared'; code: string; params: ParamValues } & ViewState);
 
 const MODES: ViewMode[] = ['pieces', 'aligned', 'assembled'];
-const VIEWS: View[] = ['sim', 'written'];
+const TABS: DesignTab[] = ['options', 'code', 'checks', 'agent'];
 
-export const DEFAULT_VIEW: ViewState = { view: 'sim', mode: 'assembled', drawer: null };
+export const DEFAULT_VIEW: ViewState = { ui: 'knit', mode: 'assembled', tab: 'options' };
 
 export function encodeB64(text: string): string {
   const bytes = new TextEncoder().encode(text);
@@ -51,10 +52,13 @@ function parseView(q: URLSearchParams): ViewState {
   const v: ViewState = { ...DEFAULT_VIEW };
   const mode = q.get('mode') as ViewMode | null;
   if (mode && MODES.includes(mode)) v.mode = mode;
-  const view = q.get('view') as View | null;
-  if (view && VIEWS.includes(view)) v.view = view;
-  const drawer = q.get('drawer') ?? ({ pattern: 'code', checks: 'checks' } as Record<string, string>)[q.get('tab') ?? ''];
-  if (drawer === 'code' || drawer === 'checks') v.drawer = drawer;
+  // older links: the drawer, or the old tab names, open the designer on that tab
+  const old = q.get('drawer') ?? ({ pattern: 'code', checks: 'checks' } as Record<string, string>)[q.get('tab') ?? ''];
+  if (old === 'code' || old === 'checks') { v.ui = 'design'; v.tab = old; }
+  const tab = q.get('tab') as DesignTab | null;
+  if (tab && TABS.includes(tab)) v.tab = tab;
+  const ui = q.get('ui');
+  if (ui === 'knit' || ui === 'design') v.ui = ui;
   return v;
 }
 
@@ -87,9 +91,9 @@ export function serializeRoute(r: Route): string {
     if (Object.keys(r.params).length) q.set('params', encodeB64(JSON.stringify(r.params)));
   }
   if (r.page !== 'browser') {
-    if (r.view !== DEFAULT_VIEW.view) q.set('view', r.view);
+    if (r.ui !== DEFAULT_VIEW.ui) q.set('ui', r.ui);
     if (r.mode !== DEFAULT_VIEW.mode) q.set('mode', r.mode);
-    if (r.drawer) q.set('drawer', r.drawer);
+    if (r.tab !== DEFAULT_VIEW.tab) q.set('tab', r.tab);
   }
   const str = q.toString();
   return str ? '?' + str : '';
@@ -97,7 +101,7 @@ export function serializeRoute(r: Route): string {
 
 /** A link that opens this pattern for anyone (projects are stored per browser, so links carry the source). */
 export function shareLink(code: string, params: ParamValues, view: ViewState): string {
-  return location.origin + location.pathname + serializeRoute({ page: 'shared', code, params, ...view, drawer: null });
+  return location.origin + location.pathname + serializeRoute({ page: 'shared', code, params, ...view });
 }
 
 /** Put a route in the address bar. `push` adds a history entry (page changes); otherwise it is replaced. */

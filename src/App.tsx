@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { parseRoute, writeRoute, type Route, type ViewState } from './urlState';
+import { DEFAULT_VIEW, parseRoute, writeRoute, type Route, type ViewState } from './urlState';
 import { projectsApi, titleOf, type ProjectPatch } from './projects';
 import { ProjectBrowser } from './components/ProjectBrowser';
-import { ProjectView, type WorkingProject } from './components/ProjectView';
+import { KnitView } from './components/KnitView';
+import { DesignView } from './components/DesignView';
+import type { ProjectViewProps, WorkingProject } from './components/project';
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 type Loaded =
@@ -68,11 +70,13 @@ export function App() {
   };
 
   const goBrowser = () => { void flush(); navigate({ page: 'browser' }); };
-  const openProject = (pid: string) => navigate({ page: 'project', id: pid, view: 'sim', mode: 'assembled', drawer: null });
+  const openProject = (pid: string) => navigate({ page: 'project', id: pid, ...DEFAULT_VIEW });
 
   if (route.page === 'browser') return <ProjectBrowser api={api} onOpen={openProject} />;
 
-  const view: ViewState = { view: route.view, mode: route.mode, drawer: route.drawer };
+  const view: ViewState = { ui: route.ui, mode: route.mode, tab: route.tab };
+  // one interface or the other; a plain call (not a component defined here), so the views keep their state
+  const ui = (key: string, p: ProjectViewProps) => (p.view.ui === 'design' ? <DesignView key={key + ':d'} {...p} /> : <KnitView key={key + ':k'} {...p} />);
   const setView = (p: Partial<ViewState>) => navigate({ ...route, ...p } as Route, false);
 
   if (route.page === 'shared') {
@@ -81,15 +85,11 @@ export function App() {
       const p = await api.create({ name: project.name, code: route.code, params: route.params });
       navigate({ page: 'project', id: p.id, ...view }, false);
     };
-    return (
-      <ProjectView
-        key="shared"
-        project={project} saved={false} saveState="idle"
-        view={view} onView={setView}
-        onChange={(p) => navigate({ ...route, ...(p.code !== undefined ? { code: p.code } : {}), ...(p.params ? { params: p.params } : {}) }, false)}
-        onSaveCopy={saveCopy} onBack={goBrowser}
-      />
-    );
+    return ui('shared', {
+      project, saved: false, saveState: 'idle', view, onView: setView,
+      onChange: (p) => navigate({ ...route, ...(p.code !== undefined ? { code: p.code } : {}), ...(p.params ? { params: p.params } : {}) }, false),
+      onSaveCopy: saveCopy, onBack: goBrowser,
+    });
   }
 
   if (!loaded || loaded.status === 'loading' || loaded.id !== route.id) return <div className="loading-page muted">Loading…</div>;
@@ -101,13 +101,8 @@ export function App() {
       </div>
     );
   }
-  return (
-    <ProjectView
-      key={loaded.id}
-      project={loaded.project} saved saveState={saveState}
-      view={view} onView={setView}
-      onChange={editProject}
-      onSaveCopy={() => {}} onBack={goBrowser}
-    />
-  );
+  return ui(loaded.id, {
+    project: loaded.project, saved: true, saveState, view, onView: setView,
+    onChange: editProject, onSaveCopy: () => {}, onBack: goBrowser,
+  });
 }
