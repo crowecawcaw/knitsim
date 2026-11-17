@@ -71,13 +71,16 @@ void main() {
 
 // Lights mirror the scene's, plus a cool back light so strands separate from the gaps.
 const LIGHTING = /* glsl */ `
+// a soft studio setup: a warm key high on the right, a dim cool fill from the left, a rim light from behind
+// that picks out the silhouette and the fuzz, and a little sky / floor bounce. Linear values; the renderer
+// tone-maps the result (ACES), so the key can be bright without clipping.
 const vec3 L0 = vec3(0.2857, 0.8571, 0.5);   // key, matches the scene's main light
 const vec3 L1 = vec3(-0.8018, 0.2673, -0.5345);
 const vec3 L2 = vec3(0.3, 0.45, -0.84);
-const vec3 C0 = vec3(1.0, 0.95, 0.88) * 1.15;
-const vec3 C1 = vec3(1.0, 0.89, 0.77) * 0.32;
-const vec3 C2 = vec3(0.62, 0.68, 0.8) * 0.4;
-const vec3 SKY = vec3(0.3, 0.29, 0.27), GROUND = vec3(0.1, 0.085, 0.07);
+const vec3 C0 = vec3(1.0, 0.94, 0.85) * 1.55;
+const vec3 C1 = vec3(0.82, 0.88, 1.0) * 0.22;
+const vec3 C2 = vec3(0.85, 0.9, 1.0) * 0.55;
+const vec3 SKY = vec3(0.24, 0.25, 0.27), GROUND = vec3(0.07, 0.06, 0.05);
 `;
 
 const FRAG = COMMON + LIGHTING + /* glsl */ `
@@ -137,7 +140,8 @@ void probe(vec2 p, vec4 S, float zs, inout Hit best) {
 
 vec3 shade(vec3 L, vec3 C, vec3 n, vec3 V, vec3 tf, vec3 base) {
   float NdL = dot(n, L);
-  float diff = max(0.0, (NdL + 0.35) / 1.35);
+  float diff = max(0.0, (NdL + 0.2) / 1.2);
+  diff *= diff * (3.0 - 2.0 * diff) * 0.6 + diff * 0.4; // a touch of contrast in the falloff
   vec3 H = normalize(L + V);
   float t1 = dot(normalize(tf + n * 0.12), H), t2 = dot(normalize(tf - n * 0.25), H);
   float s1 = pow(sqrt(max(0.0, 1.0 - t1 * t1)), 60.0), s2 = pow(sqrt(max(0.0, 1.0 - t2 * t2)), 14.0);
@@ -171,7 +175,7 @@ void main() {
   vec3 V = normalize(cameraPosition - vWorld);
 
   vec3 col;
-  float detail = 1.0 - smoothstep(0.3, 0.8, foot);
+  float detail = 1.0 - smoothstep(0.22, 0.5, foot);
   Hit best; best.h = -1e9;
   if (detail > 0.0) {
     for (int dr = 0; dr < 2; dr++) {
@@ -210,15 +214,22 @@ void main() {
   } else {
     // a gap between strands: the dim inside of the fabric
     vec3 base = unpackCol(Sc.r);
-    near = base * 0.16 * (0.5 + 0.5 * max(dot(Ng, L0), 0.0));
+    near = base * (0.22 + 0.3 * max(dot(Ng, L0), 0.0)) * C0 * 0.6;
     if (!shown(Sc)) discard;
   }
   // far away, the average look of the stitch under the pixel
   vec3 baseF = unpackCol(Sc.r);
   if (abs(Sc.a - uSelOrd) < 0.5) baseF = mix(baseF, uSelCol, 0.55);
   float purl = ((int(Sc.g) & 2) != 0) == gl_FrontFacing ? 1.0 : 0.0;
-  float nd = max(0.0, (dot(Ng, L0) + 0.35) / 1.35);
-  vec3 far = baseF * (C0 * nd * 0.75 + C1 * max(0.0, dot(Ng, L1)) * 0.5 + mix(GROUND, SKY, Ng.y * 0.5 + 0.5)) * mix(0.82, 0.68, purl);
+  // the stitch texture, filtered: columns of Vs (knit) or ridges (purl) that fade out once they're under a pixel
+  float tex = 1.0 - smoothstep(0.35, 0.9, foot);
+  float ridge = purl > 0.5 ? cos(6.2831853 * rf * 2.0) : cos(6.2831853 * (xc + 0.5)) * 0.7 + cos(6.2831853 * rf) * 0.3;
+  baseF *= 1.0 + 0.1 * ridge * tex;
+  vec3 tfF = normalize(Tv);
+  vec3 far = (shade(L0, C0, Ng, V, tfF, baseF) * 0.9 + shade(L1, C1, Ng, V, tfF, baseF) + shade(L2, C2, Ng, V, tfF, baseF)
+            + baseF * mix(GROUND, SKY, Ng.y * 0.5 + 0.5)) * mix(0.86, 0.72, purl);
+  // soft sheen at grazing angles, as yarn fuzz catches the light
+  far += baseF * pow(1.0 - max(dot(Ng, V), 0.0), 3.0) * 0.22;
   if (!shown(Sc) && detail <= 0.0) discard;
   col = mix(far, near, detail);
   if (uOvOn > 0.5 && gl_FrontFacing) { vec4 ov = texture2D(uOv, vUv); col = mix(col, srgb2lin(ov.rgb), ov.a); }
@@ -249,7 +260,7 @@ void main() {
   vec3 Ng = normalize(vNrm) * (gl_FrontFacing ? 1.0 : -1.0);
   vec3 V = normalize(cameraPosition - vWorld);
   float rim = 1.0 - abs(dot(Ng, V));
-  vec3 c = base * (C0 * (0.55 + 0.45 * max(dot(Ng, L0), 0.0)) * 0.7 + SKY * 0.7) * 1.05;
+  vec3 c = base * (C0 * (0.5 + 0.5 * max(dot(Ng, L0), 0.0)) * 0.6 + C2 * rim * 1.2 + SKY * 0.6);
   gl_FragColor = vec4(c, (0.55 - 0.45 * k) * (0.45 + 0.55 * rim));
   #include <tonemapping_fragment>
   #include <colorspace_fragment>

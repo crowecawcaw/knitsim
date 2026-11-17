@@ -110,25 +110,45 @@ export class KnitScene {
   private cleanup: (() => void)[] = [];
 
   constructor(private host: HTMLElement, private statusEl: HTMLElement, private cb: SceneCallbacks) {
-    const R = (this.R = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true }));
+    // the canvas is transparent: the studio backdrop behind it is a CSS gradient (#view3d), so it stays put
+    // while the camera orbits, the way a paper sweep behind a product shot does
+    const R = (this.R = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true }));
     R.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    R.setClearColor(0x000000, 0);
+    // filmic response: bright highlights roll off instead of clipping, shadows keep some colour
+    R.toneMapping = THREE.ACESFilmicToneMapping;
+    R.toneMappingExposure = 0.95;
     host.prepend(R.domElement);
     const scene = this.scene;
-    scene.background = new THREE.Color('#f6f4f1');
-    scene.add(new THREE.HemisphereLight(0xfff6e8, 0x8a7a68, 0.9 * LEGACY_LIGHT));
-    const d1 = new THREE.DirectionalLight(0xffffff, 0.8 * LEGACY_LIGHT); d1.position.set(20, 60, 35); scene.add(d1);
-    const d2 = new THREE.DirectionalLight(0xffe2c4, 0.3 * LEGACY_LIGHT); d2.position.set(-30, 10, -20); scene.add(d2);
+    scene.add(new THREE.HemisphereLight(0xfff6e8, 0x8a7a68, 0.7 * LEGACY_LIGHT));
+    const d1 = new THREE.DirectionalLight(0xfff3e2, 1.0 * LEGACY_LIGHT); d1.position.set(20, 60, 35); scene.add(d1);
+    const d2 = new THREE.DirectionalLight(0xdfe8ff, 0.25 * LEGACY_LIGHT); d2.position.set(-30, 10, -20); scene.add(d2);
+    const d3 = new THREE.DirectionalLight(0xe6eeff, 0.35 * LEGACY_LIGHT); d3.position.set(8, 14, -28); scene.add(d3);
+    // soft contact shadows on the floor, so the form and the table stand on something
+    const sc = document.createElement('canvas'); sc.width = sc.height = 128; const sx = sc.getContext('2d')!;
+    const sg = sx.createRadialGradient(64, 64, 0, 64, 64, 64);
+    sg.addColorStop(0, 'rgba(60,45,30,0.42)'); sg.addColorStop(0.35, 'rgba(60,45,30,0.2)'); sg.addColorStop(1, 'rgba(60,45,30,0)');
+    sx.fillStyle = sg; sx.fillRect(0, 0, 128, 128);
+    const stex = new THREE.CanvasTexture(sc); stex.colorSpace = THREE.SRGBColorSpace;
+    const shadowMat = () => new THREE.MeshBasicMaterial({ map: stex, transparent: true, depthWrite: false, toneMapped: false });
+    const floorShadow = (x: number, y: number, z: number, w: number, d: number, m: THREE.Material) => {
+      const q = new THREE.Mesh(new THREE.PlaneGeometry(w, d), m); q.rotation.x = -Math.PI / 2; q.position.set(x, y, z); q.renderOrder = -1; return q;
+    };
     // dress form
-    const fm = new THREE.MeshStandardMaterial({ color: 0xd9d1c4, roughness: 0.8, transparent: true, opacity: 0.55, depthWrite: false });
+    const fm = new THREE.MeshStandardMaterial({ color: 0xcbc2b4, roughness: 0.85, transparent: true, opacity: 0.55, depthWrite: false });
     this.formMat = fm;
     const form = capsuleGroup(BODY.capsules, fm);
     const standMat = new THREE.MeshStandardMaterial({ color: 0x8b6b4a, transparent: true });
     const stand = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 14, 12), standMat); stand.position.set(0, -14, 0); form.add(stand);
+    const formShadowMat = shadowMat();
+    form.add(floorShadow(0, -21, 0, 26, 18, formShadowMat));
     scene.add(form);
     const T = TABLE; const table = new THREE.Group();
     const tm = new THREE.MeshStandardMaterial({ color: 0xb08a62, roughness: 0.7, transparent: true });
     const top = new THREE.Mesh(new THREE.CylinderGeometry(T.r, T.r, T.depth, 48), tm); top.position.set(T.c[0], T.top - T.depth / 2, T.c[2]); table.add(top);
     const leg = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 2.2, 26, 16), tm); leg.position.set(T.c[0], T.top - 14, T.c[2]); table.add(leg);
+    const tableShadowMat = shadowMat();
+    table.add(floorShadow(T.c[0], T.top - 27, T.c[2], T.r * 2.6, T.r * 2.2, tableShadowMat));
     scene.add(table);
     // cutting mat with a 1-inch grid
     const mc = document.createElement('canvas'); mc.width = mc.height = 512; const mx = mc.getContext('2d')!;
@@ -140,13 +160,13 @@ export class KnitScene {
     }
     const mtex = (this.mtex = new THREE.CanvasTexture(mc));
     mtex.wrapS = mtex.wrapT = THREE.RepeatWrapping; mtex.anisotropy = 8; mtex.colorSpace = THREE.SRGBColorSpace;
-    const mat = (this.mat = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial({ map: mtex, roughness: 0.95, transparent: true, depthWrite: false })));
+    const mat = (this.mat = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: mtex, transparent: true, depthWrite: false, toneMapped: false })));
     mat.rotation.x = -Math.PI / 2; mat.position.y = MAT_Y - 0.05; scene.add(mat);
     const grabDot = (this.grabDot = new THREE.Mesh(new THREE.SphereGeometry(0.45, 16, 12), new THREE.MeshBasicMaterial({ color: 0xc0573e })));
     grabDot.visible = false; scene.add(grabDot);
     this.fades = {
-      form: { v: 0, t: 0, mats: [fm, standMat], base: [0.55, 1] },
-      table: { v: 0, t: 0, mats: [tm], base: [1] },
+      form: { v: 0, t: 0, mats: [fm, standMat, formShadowMat], base: [0.55, 1, 1] },
+      table: { v: 0, t: 0, mats: [tm, tableShadowMat], base: [1, 1] },
       mat: { v: 1, t: 1, mats: [mat.material as THREE.Material], base: [1] },
       labels: { v: 1, t: 1, mats: [], base: [] },
     };
@@ -255,8 +275,8 @@ export class KnitScene {
       this.drawTexture(part);
       // label on the mat
       const lc = document.createElement('canvas'); lc.width = 512; lc.height = 96; const lx = lc.getContext('2d')!;
-      lx.fillStyle = 'rgba(35,32,29,0.88)'; lx.font = '800 44px Nunito, sans-serif'; lx.fillText(part.P.name.replace(/_/g, ' '), 6, 46);
-      lx.font = '600 30px Nunito, sans-serif'; lx.fillStyle = 'rgba(35,32,29,0.5)';
+      lx.fillStyle = 'rgba(35,32,29,0.88)'; lx.font = '700 40px "IBM Plex Sans", sans-serif'; lx.fillText(part.P.name.replace(/_/g, ' '), 6, 46);
+      lx.font = '500 28px "IBM Plex Sans", sans-serif'; lx.fillStyle = 'rgba(35,32,29,0.5)';
       const fb0 = part.flatBox; const [wIn, hIn] = part.mesh.graph ? [fb0.x1 - fb0.x0, fb0.z1 - fb0.z0] : [part.P.widthIn, part.P.heightIn];
       lx.fillText(`${wIn.toFixed(1)}″ × ${hIn.toFixed(1)}″ · ${part.P.nrows - 1} rows`, 6, 86);
       const lt = new THREE.CanvasTexture(lc); lt.colorSpace = THREE.SRGBColorSpace;
