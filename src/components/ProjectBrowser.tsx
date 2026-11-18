@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { EXAMPLES } from '../knit/examples';
-import { BLANK_PATTERN, titleOf, type ProjectInput, type ProjectsApi, type ProjectSummary } from '../projects';
+import type { ProjectsApi, ProjectSummary } from '../projects';
 import { pieceName } from '../knit/prose';
 import { YarnLogo } from './YarnLogo';
 
@@ -52,10 +51,6 @@ export function ProjectBrowser({ api, onOpen }: Props) {
   }, [api]);
   useEffect(refresh, [refresh]);
 
-  const create = async (input: ProjectInput) => {
-    try { const p = await api.create(input); onOpen(p.id); }
-    catch (e) { setError(String((e as Error).message)); }
-  };
   const duplicate = async (s: ProjectSummary) => {
     const p = await api.get(s.id);
     await api.create({ name: `${p.name} (copy)`, code: p.code, params: p.params, example: p.example });
@@ -85,9 +80,6 @@ export function ProjectBrowser({ api, onOpen }: Props) {
             <p>Watch a pattern knit itself</p>
           </div>
         </div>
-        <button className="dark-btn" onClick={() => create({ name: 'New project', code: BLANK_PATTERN })}>
-          <span aria-hidden="true">＋</span> New project
-        </button>
       </header>
 
       <main className="browser-body">
@@ -96,7 +88,7 @@ export function ProjectBrowser({ api, onOpen }: Props) {
         {list === null && !error && <p className="muted">Loading…</p>}
         {list && list.length === 0 && (
           <div className="empty">
-            <p>No projects yet. Start a blank one, or pick an example below.</p>
+            <p>No projects yet.</p>
           </div>
         )}
         {list && list.length > 0 && (
@@ -126,14 +118,6 @@ export function ProjectBrowser({ api, onOpen }: Props) {
           </ul>
         )}
 
-        <h2 className="browser-h">Start from an example</h2>
-        <div className="chips">
-          {EXAMPLES.map((e) => (
-            <button key={e.key} className="chip" onClick={() => create({ name: titleOf(e.src) ?? e.label, code: e.src, example: e.key })}>
-              {e.label}
-            </button>
-          ))}
-        </div>
         <p className="muted small browser-foot">Projects are saved in this browser. Use the share button inside a project to send someone a link.</p>
       </main>
     </div>
