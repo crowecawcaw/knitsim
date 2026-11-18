@@ -153,10 +153,12 @@ export class KnitScene {
     scene.add(table);
     // cutting mat with a 1-inch grid
     const mc = document.createElement('canvas'); mc.width = mc.height = 512; const mx = mc.getContext('2d')!;
-    mx.fillStyle = '#ece7e0'; mx.fillRect(0, 0, 512, 512);
+    const palette = getComputedStyle(host);
+    mx.fillStyle = palette.getPropertyValue('--pool').trim(); mx.fillRect(0, 0, 512, 512);
     for (let i = 0; i <= 12; i++) {
       const p = (i * 512) / 12;
-      mx.strokeStyle = i % 6 === 0 ? 'rgba(120,100,80,0.28)' : 'rgba(120,100,80,0.13)'; mx.lineWidth = i % 6 === 0 ? 2.5 : 1.2;
+      mx.strokeStyle = palette.getPropertyValue(i % 6 === 0 ? '--pool-grid-major' : '--pool-grid').trim();
+      mx.lineWidth = i % 6 === 0 ? 2.5 : 1.2;
       mx.beginPath(); mx.moveTo(p, 0); mx.lineTo(p, 512); mx.moveTo(0, p); mx.lineTo(512, p); mx.stroke();
     }
     const mtex = (this.mtex = new THREE.CanvasTexture(mc));
