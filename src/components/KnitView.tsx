@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Piece, Stitch } from '../knit';
-import { spellOut, toProse } from '../knit/prose';
+import { toProse } from '../knit/prose';
 import { shareLink, type ViewMode } from '../urlState';
 import { Viewer, type ViewerHandle } from './Viewer';
 import { Params } from './Params';
@@ -22,8 +22,8 @@ const TOP: ReadPos = { piece: null, progress: Infinity, id: null, finishing: fal
 
 /**
  * The knitter's interface: the pattern is the page. Scrolling it knits the preview along: the step at the
- * reading line, and how far through it you are, decide how many stitches are worked. Tapping a step reads it
- * in plain words; tapping the preview opens it full screen to step through the pattern there.
+ * reading line, and how far through it you are, decide how many stitches are worked. The enlarged preview
+ * also has arrows for stepping through the instructions.
  */
 export function KnitView({ project, saved, saveState, view, onView, onChange, onSaveCopy, onBack }: ProjectViewProps) {
   const { code, params } = project;
@@ -35,12 +35,9 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
   const wasBig = useRef(false);
   const [floating, setFloating] = useState(false);
 
-  // ---- where the reader is: from scrolling, or pinned to a tapped step until they scroll on
+  // ---- where the reader is in the scrolling pattern
   const scroller = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<ReadPos>(TOP);
-  const [sel, setSel] = useState<string | null>(null);
-  const [pinned, setPinned] = useState(false);
-  const pinTop = useRef(0);
 
   const measure = useCallback(() => {
     const el = scroller.current; if (!el) return;
@@ -50,11 +47,6 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
     const stickyTop = parseFloat(gridStyle.getPropertyValue('--preview-top'));
     const paddingTop = parseFloat(gridStyle.paddingTop);
     setFloating(el.scrollTop >= paddingTop - stickyTop);
-    if (pinned) {
-      if (Math.abs(el.scrollTop - pinTop.current) < 40) return;
-      setPinned(false);
-    }
-
     let next = TOP;
     for (const section of el.querySelectorAll<HTMLElement>('[data-pattern-piece], [data-finishing]')) {
       if (section.getBoundingClientRect().top > readingLine) break;
@@ -84,7 +76,7 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
       prev.piece === next.piece && prev.progress === next.progress && prev.id === next.id
         && prev.finishing === next.finishing && prev.seamLine === next.seamLine ? prev : next
     ));
-  }, [doc, pinned]);
+  }, [doc]);
 
   useEffect(() => {
     const el = scroller.current; if (!el) return;
@@ -96,23 +88,15 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
     return () => { cancelAnimationFrame(raf); el.removeEventListener('scroll', on); window.removeEventListener('resize', on); };
   }, [measure]);
 
-  const stop = stops.find((s) => s.id === sel) ?? null;
-  const usePin = pinned && stop;
-  const pieceName = usePin ? stop.piece : pos.piece;
-  const piece = pieceName ? doc.built.pieces[pieceName] : null;
-  const progress = !piece ? 0 : usePin ? endOf(piece, stop.row) : Math.min(pos.progress, piece.total);
-
-  const pin = (id: string | null) => {
-    setSel(id);
-    setPinned(id !== null);
-    pinTop.current = scroller.current?.scrollTop ?? 0;
-  };
-  const select = (id: string) => pin(id === sel ? null : id);
-
   // ---- the preview: small beside the pattern, or full screen
   const [big, setBig] = useState(false);
+  const [previewStep, setPreviewStep] = useState<string | null>(null);
+  const stop = big ? stops.find((s) => s.id === previewStep) : undefined;
+  const pieceName = stop?.piece ?? pos.piece;
+  const piece = pieceName ? doc.built.pieces[pieceName] : null;
+  const progress = !piece ? 0 : stop ? endOf(piece, stop.row) : Math.min(pos.progress, piece.total);
   const [choice, setChoice] = useState<{ section: string | null; mode: ViewMode } | null>(null);
-  const finishing = !usePin && pos.finishing;
+  const finishing = !stop && pos.finishing;
   const section = finishing ? 'finishing' : pieceName ? `piece:${pieceName}` : null;
   const needs3D = finishing || piece?.round || doc.seams.some((s) =>
     (s.kind === 'pickup' || s.kind === 'join') && s.a.split('.')[0] === pieceName);
@@ -129,6 +113,7 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
   useEffect(() => {
     if (!big) {
       setPicked(null);
+      setPreviewStep(null);
       if (wasBig.current) openButton.current?.focus({ preventScroll: true });
       wasBig.current = false;
       return;
@@ -140,24 +125,24 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
   }, [big]);
 
   // full screen: step through the pattern, and keep the page in step behind it
-  const here = usePin ? stop : stops.find((s) => s.id === pos.id) ?? null;
+  const here = stop ?? stops.find((s) => s.id === pos.id);
   const idx = here ? stops.indexOf(here) : -1;
   const go = (d: number) => {
     const next = stops[idx < 0 && finishing ? stops.length - 1 : Math.max(0, Math.min(stops.length - 1, idx + d))]; if (!next) return;
     const el = scroller.current;
     const li = el?.querySelector<HTMLElement>(`[data-step="${next.id}"]`);
     if (el && li) {
-      // put the end of the step on the reading line, where scrolling would show the same thing
+      // Leave the step at the reading line when the knitter returns to the page.
       const box = el.getBoundingClientRect();
-      el.scrollTop += li.getBoundingClientRect().bottom - (box.top + box.height * READ_AT);
+      el.scrollTop += li.getBoundingClientRect().bottom - (box.top + box.height * READ_AT) - 1;
     }
-    pin(next.id);
+    setPreviewStep(next.id);
   };
 
   const errors = doc.errors.filter((e) => e.level === 'error').length;
   const pattern = useMemo(() => (
     <WrittenPattern
-      prose={prose} errors={errors} selected={sel} here={usePin ? null : pos.id} onSelect={select}
+      prose={prose} errors={errors} here={pos.id}
       settings={doc.params.length > 0
         ? <Params
             params={doc.params}
@@ -171,17 +156,20 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
       ))}
     />
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  ), [prose, errors, sel, usePin, pos.id, doc.params, params]);
+  ), [prose, errors, pos.id, doc.params, params]);
 
   const pieceTitle = pieceName ? pieceName.replace(/_/g, ' ') : '';
   const caption = finishing ? 'Finishing' : here ? here.label : piece ? progress < piece.total ? 'Starting piece' : 'Finished piece' : 'Finished project';
+  const finishingStep = finishing ? prose.finishing.find((s) => s.line === pos.seamLine) : undefined;
+  const instruction = here?.text ?? finishingStep?.text ?? (finishing
+    ? 'Follow the finishing instructions in the pattern.'
+    : 'Step through the pattern with the arrows, or tap a stitch to see how it’s made.');
   const modes = (
     <div className="seg kv-modes" role="group" aria-label="Preview view">
       <button aria-pressed={mode === 'assembled'} className={mode === 'assembled' ? 'on' : ''} onClick={() => setMode('assembled')}>3D view</button>
       <button aria-pressed={mode === 'pieces'} className={mode === 'pieces' ? 'on' : ''} onClick={() => setMode('pieces')}>Piece view</button>
     </div>
   );
-  const words = here ? spellOut(here.text, here.round) ?? here.text : null;
 
   return (
     <div className={'kv' + (big ? ' kv-big' : '')}>
@@ -218,7 +206,7 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
                 <button className="icon-btn" aria-label="Previous step" disabled={idx === 0} onClick={() => go(-1)}><IconPrev /></button>
                 <div className="kv-bigtext">
                   <strong><span className="cap">{pieceTitle}</span>{here ? ` · ${here.label}` : caption}</strong>
-                  <p>{words ?? 'Step through the pattern with the arrows, or tap a stitch to see how it’s made.'}</p>
+                  <p>{instruction}</p>
                 </div>
                 <button className="icon-btn" aria-label="Next step" disabled={finishing || idx >= stops.length - 1} onClick={() => go(1)}><IconNext /></button>
               </div>
