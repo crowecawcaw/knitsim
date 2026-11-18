@@ -280,7 +280,7 @@ export function fabricMaterials(P: Piece, mesh: MeshLike, sg: number, rg: number
   };
   const cloth = new THREE.ShaderMaterial({
     uniforms: { ...shared, uLift: { value: 0 }, uR: { value: 0.18 }, uD: { value: 0.2 }, uHgt: { value: 0.74 }, uTw: { value: 9 },
-      uOv: { value: overlay }, uOvOn: { value: 0 }, uContext: { value: 0 }, uSelCol: { value: new THREE.Color(0x8a6fd1).convertSRGBToLinear() } },
+      uOv: { value: overlay }, uOvOn: { value: 0 }, uContext: { value: 0 }, uSelCol: { value: new THREE.Color(0x2f86b8).convertSRGBToLinear() } },
     vertexShader: VERT, fragmentShader: FRAG, side: THREE.DoubleSide,
   });
   const fuzzLen = 0.32 / sg; // ~1.8 yarn radii

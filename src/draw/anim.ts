@@ -36,7 +36,7 @@ function needleDraw(ctx: Ctx, x1: number, y1: number, x2: number, y2: number) {
 /** Draw frame t ∈ [0,1) of the animation for stitch s; returns the caption for this step. */
 export function drawAnim(ctx: Ctx, t: number, s: Stitch, P: Piece): string {
   ctx.clearRect(0, 0, ANIM_W, ANIM_H);
-  ctx.fillStyle = '#efe6d8'; ctx.fillRect(0, 0, ANIM_W, ANIM_H);
+  ctx.fillStyle = '#f4efe6'; ctx.fillRect(0, 0, ANIM_W, ANIM_H);
   const col = s.color; const row = P.rows[s.row];
   const act = row.dir === 'WS' ? (s.t === 'k' ? 'p' : 'k') : s.t; // action from the knitter's side
   const op = s.op;
@@ -111,7 +111,7 @@ export function drawAnim(ctx: Ctx, t: number, s: Stitch, P: Piece): string {
       : t < 0.74 ? (act === 'k' ? 'Pull the new loop through toward you — it passes in front of the old loop.' : 'Push the new loop through to the back — the old loop’s top stays in front as a bump.')
       : (op === 'dec' ? 'Slide both old loops off: two stitches became one.' : op === 'inc' ? 'Two new loops from one: the row grows by a stitch.' : `Slide the old loop off. One ${verb} stitch done.`);
   }
-  ctx.fillStyle = '#5b4a3a'; ctx.font = '600 12px "IBM Plex Sans", system-ui, sans-serif';
+  ctx.fillStyle = '#1e2b3c'; ctx.font = '600 12px Courier, "Courier New", "Courier Prime", monospace';
   ctx.fillText(stitchName(s, P).toUpperCase(), 12, 20);
   return step;
 }
