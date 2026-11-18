@@ -24,7 +24,7 @@ interface Fade { v: number; t: number; mats: THREE.Material[]; base: number[] }
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Sim = any; // returned by makeSim (untyped engine)
 interface Part {
-  P: Piece; mesh: any; offset: number; idx: number;
+  P: Piece; mesh: any; offset: number; idx: number; at: string;
   canvas: HTMLCanvasElement; tex: THREE.CanvasTexture;
   g: THREE.BufferGeometry; attr: THREE.BufferAttribute; meshes: THREE.Mesh[]; flatBox: Box;
   fab: FabricMats; shells: THREE.Mesh[];
@@ -346,27 +346,10 @@ export class KnitScene {
       if (sim.seams.length || this.parts.some((p) => p.P.gather)) {
         for (let i = 0; i < 20; i++) sim.step(1 / 60, { assembleT: sim.tGrav, iters: 5, firm: true });
       }
+      this.smoothNeckbands();
       this.posAssembled = new Float32Array(sim.pos);
     }
     sim.pos.set(flat ? this.posFlat : useAssembly ? this.posAssembled : this.posAligned);
-    if (!flat && active?.P.round && joins.length) {
-      // Keep the active tube firm while placing its base at the solved join.
-      const start = active.offset * 3;
-      const length = active.attr.array.length;
-      const shift = [0, 0, 0];
-      for (let i = start; i < start + length; i += 3) {
-        for (let axis = 0; axis < 3; axis++) shift[axis] += sim.pos[i + axis] - this.posAligned![i + axis];
-      }
-      for (let i = start; i < start + length; i += 3) {
-        const vertex = (i - start) / 3;
-        const height = active.mesh.graph ? active.mesh.sts[vertex].row / active.P.nrows : active.mesh.uv[2 * vertex + 1];
-        const blend = THREE.MathUtils.smoothstep(height, 0, 0.6);
-        for (let axis = 0; axis < 3; axis++) {
-          const firm = this.posAligned![i + axis] + shift[axis] / (length / 3);
-          sim.pos[i + axis] = THREE.MathUtils.lerp(sim.pos[i + axis], firm, blend);
-        }
-      }
-    }
     for (const part of this.parts) {
       part.meshes.forEach((mesh) => { mesh.visible = flat || visible.has(part.P.name); });
       part.fab.cloth.uniforms.uFirm.value = flat ? 0 : 1;
@@ -378,6 +361,38 @@ export class KnitScene {
     this.applyFades(true);
     this.camTween = null;
     Object.assign(this.cam, this.focusPreset() ?? this.camPreset(this.mode));
+  }
+
+  /** Keep the pick-up edge attached, and fit the rounds above it to smooth ovals. */
+  private smoothNeckbands() {
+    const positions: Float32Array = this.sim.pos;
+    for (const part of this.parts) {
+      if (part.at !== 'neck' || !part.P.round || !part.mesh.band) continue;
+      const attaches = this.doc?.seams.some((s) => s.kind === 'pickup' && s.a === `${part.P.name}.bottom`);
+      if (!attaches) continue;
+
+      const { nx, ny } = part.mesh;
+      const angles = Array.from({ length: nx }, (_, column) => {
+        const angle = 2 * Math.PI * column / nx;
+        return [Math.cos(angle), Math.sin(angle)];
+      });
+      for (let row = 1; row <= ny; row++) {
+        const start = 3 * (part.offset + row * (nx + 1));
+        for (let axis = 0; axis < 3; axis++) {
+          let center = 0, cos = 0, sin = 0;
+          for (let column = 0; column < nx; column++) {
+            const value = positions[start + 3 * column + axis];
+            center += value;
+            cos += value * angles[column][0];
+            sin += value * angles[column][1];
+          }
+          for (let column = 0; column <= nx; column++) {
+            const [c, s] = angles[column % nx];
+            positions[start + 3 * column + axis] = (center + 2 * (cos * c + sin * s)) / nx;
+          }
+        }
+      }
+    }
   }
 
   private traceFirmSeam() {
@@ -610,8 +625,9 @@ export class KnitScene {
       if (!this.sized || this.firm) {
         this.sized = true;
         const to = this.focusPreset() ?? this.camPreset(this.mode);
-        // a flight in progress lands on the reframed view instead
-        if (this.camTween) this.camTween.to = { ...to, theta: this.camTween.to.theta };
+        // A flight in progress lands on the reframed view instead.
+        if (this.camTween) this.camTween.to = { ...to, theta: this.camTween.to.theta, ...(this.firm ? { phi: this.camTween.to.phi } : {}) };
+        else if (this.firm) Object.assign(this.cam, { target: to.target, dist: to.dist });
         else Object.assign(this.cam, to);
       }
     }

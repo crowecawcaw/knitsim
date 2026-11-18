@@ -8,7 +8,6 @@ import { Inspector } from './Inspector';
 import { ProjectBar } from './ProjectBar';
 import { PatternHeading, WrittenPattern, stopsOf } from './WrittenPattern';
 import { IconClose, IconNext, IconPrev } from './Icons';
-import { useStacked } from '../layout';
 import { useDoc, type ProjectViewProps } from './project';
 
 const NO_INSETS = { t: 0, b: 0, r: 0 };
@@ -31,8 +30,9 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
   const { doc, runCode } = useDoc(code, params);
   const prose = useMemo(() => toProse(doc, runCode), [doc, runCode]);
   const stops = useMemo(() => stopsOf(prose), [prose]);
-  const stacked = useStacked();
-  const heading = useRef<HTMLDivElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
+  const openButton = useRef<HTMLButtonElement>(null);
+  const wasBig = useRef(false);
   const [floating, setFloating] = useState(false);
 
   // ---- where the reader is: from scrolling, or pinned to a tapped step until they scroll on
@@ -46,8 +46,10 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
     const el = scroller.current; if (!el) return;
     const box = el.getBoundingClientRect();
     const readingLine = box.top + box.height * READ_AT;
-    const heroBottom = heading.current?.getBoundingClientRect().bottom ?? box.top;
-    setFloating(heroBottom <= box.top + 16);
+    const gridStyle = getComputedStyle(el.firstElementChild!);
+    const stickyTop = parseFloat(gridStyle.getPropertyValue('--preview-top'));
+    const paddingTop = parseFloat(gridStyle.paddingTop);
+    setFloating(el.scrollTop >= paddingTop - stickyTop);
     if (pinned) {
       if (Math.abs(el.scrollTop - pinTop.current) < 40) return;
       setPinned(false);
@@ -124,7 +126,14 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
   // keep the piece being read in frame
   useEffect(() => { if (pieceName) viewer.current?.focusPiece(pieceName); else viewer.current?.fit(); }, [pieceName, mode, doc]);
   useEffect(() => {
-    if (!big) { setPicked(null); return; }
+    if (!big) {
+      setPicked(null);
+      if (wasBig.current) openButton.current?.focus({ preventScroll: true });
+      wasBig.current = false;
+      return;
+    }
+    wasBig.current = true;
+    closeButton.current?.focus({ preventScroll: true });
     const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setBig(false); };
     window.addEventListener('keydown', esc); return () => window.removeEventListener('keydown', esc);
   }, [big]);
@@ -183,18 +192,17 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
       />
       <div className="kv-body" ref={scroller}>
         <div className="kv-grid">
-        <div className="kv-heading wp" ref={heading}><PatternHeading prose={prose} /></div>
-        <main className="kv-pattern">{pattern}</main>
+        <div className="kv-heading wp" inert={big}><PatternHeading prose={prose} /></div>
+        <main className="kv-pattern" inert={big}>{pattern}</main>
 
-        <aside className={'kv-preview' + (floating ? ' kv-floating' : '') + (stacked && floating ? ' kv-docked' : '')} aria-label="Pattern preview">
+        <aside className={'kv-preview' + (floating ? ' kv-floating' : '')} role={big ? 'dialog' : undefined} aria-modal={big || undefined} aria-label="Pattern preview">
           <div className="kv-stage">
             <Viewer ref={viewer} doc={doc} mode={mode} showSeams={finishing} knit={knit} firm seamLine={finishing ? pos.seamLine : undefined}
-              onPick={(st) => big && setPicked({ doc, st })} panelOpen={false} chrome={big ? { t: 70, b: 150, r: 0 } : NO_INSETS} />
-            {!big && <button className="kv-tap" aria-label="Enlarge the preview" onClick={() => setBig(true)} />}
+              onPick={(st) => big && setPicked({ doc, st })} panelOpen={false} chrome={NO_INSETS} />
+            {!big && <button className="kv-tap" ref={openButton} aria-label="Enlarge the preview" onClick={() => setBig(true)} />}
           </div>
           {!big && (
             <div className="kv-cap">
-              {modes}
               {pieceTitle && <strong className="cap">{pieceTitle}</strong>}
               <span>{caption}{piece && progress > 0 && progress < piece.total ? ` · ${progress} of ${piece.total} sts worked` : ''}</span>
             </div>
@@ -203,7 +211,7 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
             <>
               <div className="kv-bigtop">
                 {modes}
-                <button className="icon-btn kv-close" aria-label="Close the preview" onClick={() => setBig(false)}><IconClose size={20} /></button>
+                <button className="icon-btn kv-close" ref={closeButton} aria-label="Close the preview" onClick={() => setBig(false)}><IconClose size={20} /></button>
               </div>
               <div className="kv-bigbottom">
                 <button className="icon-btn" aria-label="Previous step" disabled={idx === 0} onClick={() => go(-1)}><IconPrev /></button>
