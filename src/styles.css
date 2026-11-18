@@ -245,7 +245,9 @@ pre.ref { font: 12px/1.5 "IBM Plex Mono", monospace; white-space: pre-wrap; back
   position: fixed;
   inset: 0;
   z-index: 20;
-  width: auto;
+  grid-area: auto;
+  justify-self: stretch;
+  width: 100%;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 8px;
@@ -390,7 +392,7 @@ pre.ref { font: 12px/1.5 "IBM Plex Mono", monospace; white-space: pre-wrap; back
   .kv-preview.kv-floating { width: min(100%, 118px); }
   .kv-floating .kv-stage { height: clamp(76px, 13vh, 106px); }
   .kv-modes button { padding: 3px 6px; }
-  .kv-big .kv-preview.kv-floating { width: auto; }
+  .kv-big .kv-preview.kv-floating { width: 100%; }
 }
 @media (hover: none) { .project-actions { opacity: 1; } }
 
