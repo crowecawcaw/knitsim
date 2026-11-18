@@ -185,7 +185,7 @@ export class KnitScene {
   }
 
   // ---------- public API ----------
-  setDoc(doc: KnitDoc) { this.doc = doc; this.rebuild(); }
+  setDoc(doc: KnitDoc, module: WebAssembly.Module | null) { this.doc = doc; this.rebuild(module); }
 
   setKnitState(next: KnitState) {
     const prev = this.knit;
@@ -253,7 +253,7 @@ export class KnitScene {
     });
   }
 
-  private rebuild() {
+  private rebuild(module: WebAssembly.Module | null) {
     this.needsRender = true;
     this.disposeGroup();
     this.group = new THREE.Group(); this.scene.add(this.group);
@@ -262,7 +262,7 @@ export class KnitScene {
     const doc = this.doc;
     if (!doc || !doc.seams) return;
     let sim: Sim;
-    try { sim = makeSim(doc); } catch (e) { console.error(e); this.statusEl.textContent = 'Could not build 3D: ' + (e as Error).message; return; }
+    try { sim = makeSim(doc, module); } catch (e) { console.error(e); this.statusEl.textContent = 'Could not build 3D: ' + (e as Error).message; return; }
     this.sim = sim; sim.parts.forEach((pt: Part, i: number) => { pt.idx = i; });
     this.parts = sim.parts;
     this.posAligned = new Float32Array(sim.pos);
