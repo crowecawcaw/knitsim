@@ -68,8 +68,9 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
       }
       const piece = doc.built.pieces[section.dataset.patternPiece!];
       if (!piece) continue;
-      next = { ...TOP, piece: piece.name };
-      for (const step of section.querySelectorAll<HTMLElement>('[data-piece]')) {
+      const steps = section.querySelectorAll<HTMLElement>('[data-piece]');
+      next = { ...TOP, piece: piece.name, progress: steps.length ? 0 : Infinity };
+      for (const step of steps) {
         const rect = step.getBoundingClientRect();
         if (rect.top > readingLine) break;
         const fraction = Math.max(0, Math.min(1, (readingLine - rect.top) / Math.max(1, rect.height)));
@@ -99,7 +100,7 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
   const usePin = pinned && stop;
   const pieceName = usePin ? stop.piece : pos.piece;
   const piece = pieceName ? doc.built.pieces[pieceName] : null;
-  const progress = !piece ? 0 : usePin ? endOf(piece, stop.row) : Math.min(Math.max(pos.progress, 1), piece.total);
+  const progress = !piece ? 0 : usePin ? endOf(piece, stop.row) : Math.min(pos.progress, piece.total);
 
   const pin = (id: string | null) => {
     setSel(id);
@@ -173,7 +174,7 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
   ), [prose, errors, sel, usePin, pos.id, doc.params, params]);
 
   const pieceTitle = pieceName ? pieceName.replace(/_/g, ' ') : '';
-  const caption = finishing ? 'Finishing' : here ? here.label : piece ? 'Finished piece' : 'Finished project';
+  const caption = finishing ? 'Finishing' : here ? here.label : piece ? progress < piece.total ? 'Starting piece' : 'Finished piece' : 'Finished project';
   const modes = (
     <div className="seg kv-modes" role="group" aria-label="Preview view">
       <button aria-pressed={mode === 'assembled'} className={mode === 'assembled' ? 'on' : ''} onClick={() => setMode('assembled')}>3D view</button>

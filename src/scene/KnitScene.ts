@@ -27,7 +27,7 @@ interface Part {
   P: Piece; mesh: any; offset: number; idx: number; at: string;
   canvas: HTMLCanvasElement; tex: THREE.CanvasTexture;
   g: THREE.BufferGeometry; attr: THREE.BufferAttribute; meshes: THREE.Mesh[]; flatBox: Box;
-  fab: FabricMats; shells: THREE.Mesh[];
+  fab: FabricMats; shells: THREE.Mesh[]; label: THREE.Mesh;
   /** stitch-graph parts: render vertex → sim vertex, and the indexed sim mesh used for normals */
   map?: Int32Array; gi?: THREE.BufferGeometry;
 }
@@ -231,7 +231,16 @@ export class KnitScene {
     if (this.firm && this.mode === 'assembled') return this.firmPreset();
     if (this.mode !== 'pieces' || !this.focused) return null;
     const part = this.parts.find((p) => p.P.name === this.focused); if (!part || !part.flatBox) return null;
-    const b = part.flatBox;
+    const b = { ...part.flatBox };
+    if (this.firm) {
+      for (const p of this.parts) {
+        if (!p.meshes[0].visible) continue;
+        b.x0 = Math.min(b.x0, p.flatBox.x0);
+        b.x1 = Math.max(b.x1, p.flatBox.x1);
+        b.z0 = Math.min(b.z0, p.flatBox.z0);
+        b.z1 = Math.max(b.z1, p.flatBox.z1);
+      }
+    }
     return this.camPreset('pieces', { x0: b.x0 - 3, x1: b.x1 + 3, z0: b.z0 - 3, z1: b.z1 + 5 });
   }
 
@@ -304,6 +313,7 @@ export class KnitScene {
       const lm = new THREE.MeshBasicMaterial({ map: lt, transparent: true, depthWrite: false });
       const label = new THREE.Mesh(new THREE.PlaneGeometry(16, 3), lm); label.rotation.x = -Math.PI / 2;
       const fb = part.flatBox; label.position.set(fb.x0 + 8, MAT_Y + 0.01, fb.z1 + 2.6); this.group!.add(label);
+      part.label = label;
       this.fades.labels.mats.push(lm); this.fades.labels.base.push(1);
     });
     // foot forms for shoes
@@ -331,16 +341,12 @@ export class KnitScene {
     if (!sim) return;
     const flat = this.mode === 'pieces';
     const active = this.parts.find((p) => p.P.name === this.focused);
-    const visible = new Set(this.focused ? [this.focused] : this.parts.map((p) => p.P.name));
-    const joins = this.doc?.seams.filter((s) => (s.kind === 'pickup' || s.kind === 'join') &&
-      s.a.split('.')[0] === this.focused) ?? [];
-    if (!flat) {
-      for (const seam of joins) {
-        for (const edge of [...(seam.A ?? []), ...(seam.B ?? [])]) visible.add(edge.piece);
-      }
-    }
+    // The simulation and the written pattern share the same construction order.
+    const current = this.parts.find((p) => p.P.name === this.knit.curPiece);
+    const joining = this.doc?.seams.some((s) => (s.kind === 'pickup' || s.kind === 'join') &&
+      s.a.split('.')[0] === this.focused);
     // Close the joins in a short solve without gravity, then reuse the frozen shape.
-    const useAssembly = !active || joins.length > 0 || !active.P.round;
+    const useAssembly = !active || joining || !active.P.round;
     if (!flat && useAssembly && !this.posAssembled) {
       sim.reset();
       if (sim.seams.length || this.parts.some((p) => p.P.gather)) {
@@ -351,9 +357,18 @@ export class KnitScene {
     }
     sim.pos.set(flat ? this.posFlat : useAssembly ? this.posAssembled : this.posAligned);
     for (const part of this.parts) {
-      part.meshes.forEach((mesh) => { mesh.visible = flat || visible.has(part.P.name); });
-      part.fab.cloth.uniforms.uFirm.value = flat ? 0 : 1;
-      const showFuzz = flat && this.fuzzOn;
+      const visible = !current || part.idx <= current.idx;
+      const context = !flat && !!current && part !== current;
+      part.meshes.forEach((mesh) => { mesh.visible = visible; });
+      part.label.visible = visible;
+      const cloth = part.fab.cloth;
+      cloth.uniforms.uFirm.value = flat ? 0 : 1;
+      cloth.uniforms.uContext.value = context ? 1 : 0;
+      cloth.transparent = context;
+      cloth.depthWrite = !context;
+      const side = context ? THREE.FrontSide : THREE.DoubleSide;
+      if (cloth.side !== side) { cloth.side = side; cloth.needsUpdate = true; }
+      const showFuzz = flat && visible && this.fuzzOn;
       part.shells.forEach((shell) => { shell.visible = showFuzz; });
     }
     this.markDirty();
@@ -445,10 +460,11 @@ export class KnitScene {
     const target = bounds.getCenter(new THREE.Vector3());
     const onTable = active?.mesh.graph && (active.P.round || this.sim.feet.length) ||
       (!active && this.sim.useTable);
+    const collar = active?.at === 'neck' && active.P.round;
     return {
       target, dist: Math.max(4, this.fitDist(size.x + 0.45 * size.z, Math.hypot(size.y, size.z), 38)),
-      phi: onTable ? 0.62 : active?.P.round ? 0.85 : 1.28,
-      theta: onTable ? 0.42 : 0.35, fov: 38,
+      phi: onTable ? 0.62 : collar ? 1.05 : active?.P.round ? 0.85 : 1.28,
+      theta: collar ? 0.6 : onTable ? 0.42 : 0.35, fov: 38,
     };
   }
 
@@ -691,7 +707,7 @@ export class KnitScene {
     const pxPerIn = hPx / (2 * this.cam.dist * Math.tan((this.cam.fov * Math.PI) / 360));
     const on = (!this.firm || this.mode === 'pieces') && pxPerIn / this.doc.built.sg > 5;
     if (on === this.fuzzOn) return;
-    this.fuzzOn = on; this.parts.forEach((p) => p.shells.forEach((m) => { m.visible = on; }));
+    this.fuzzOn = on; this.parts.forEach((p) => p.shells.forEach((m) => { m.visible = on && p.meshes[0].visible; }));
   }
 
   private updateGrabDot() {
@@ -736,7 +752,7 @@ export class KnitScene {
       this.raycaster.setFromCamera(new THREE.Vector2(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1), this.camera);
       return this.raycaster;
     };
-    const hits = (cx: number, cy: number) => (this.parts.length ? ray(cx, cy).intersectObjects(this.parts.flatMap((p) => p.meshes.filter((mesh) => mesh.visible)), false) : []);
+    const hits = (cx: number, cy: number) => (this.parts.length ? ray(cx, cy).intersectObjects(this.parts.flatMap((p) => p.meshes.filter((mesh) => mesh.visible && !p.fab.cloth.transparent)), false) : []);
     let grabbing: { plane: THREE.Plane } | null = null;
     const down = (e: PointerEvent) => {
       el.setPointerCapture(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]); this.camTween = null; moved = 0; downAt = [e.clientX, e.clientY];
