@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { BODY, TABLE, makeSim, type KnitDoc, type Piece, type Stitch } from '../knit';
 import { drawOverlay, pieceXY, rowExtents } from '../draw/stitches';
 import type { ViewMode } from '../urlState';
+import { yarnTubes } from './yarn';
 import { fabricMaterials, setFabricState, type FabricMats } from './fabric';
 
 // Match the look of the original (three r147, legacy lighting): hex colours are
@@ -27,6 +28,8 @@ interface Part {
   P: Piece; mesh: any; offset: number; idx: number;
   canvas: HTMLCanvasElement; tex: THREE.CanvasTexture;
   g: THREE.BufferGeometry; attr: THREE.BufferAttribute; meshes: THREE.Mesh[]; flatBox: Box;
+  tubes?: ReturnType<typeof yarnTubes>;
+  tubePositionsDirty?: boolean;
   fab: FabricMats; shells: THREE.Mesh[];
   /** stitch-graph parts: render vertex → sim vertex, and the indexed sim mesh used for normals */
   map?: Int32Array; gi?: THREE.BufferGeometry;
@@ -108,6 +111,8 @@ export class KnitScene {
   private simRunning = false; private simT = 0; private relaxUntil = 0; private lastT = 0;
   private raf = 0;
   private fuzzOn = false;
+  private yarnFrustum = new THREE.Frustum();
+  private clipMatrix = new THREE.Matrix4();
   private cleanup: (() => void)[] = [];
 
   constructor(private host: HTMLElement, private statusEl: HTMLElement, private cb: SceneCallbacks) {
@@ -237,6 +242,7 @@ export class KnitScene {
   // ---------- build ----------
   private disposeGroup() {
     for (const p of this.parts) {
+      p.tubes?.texture.dispose();
       p.gi?.dispose();
       p.tex.dispose();
       p.fab.cloth.uniforms.uLoopBins.value.dispose();
@@ -355,6 +361,7 @@ export class KnitScene {
         for (let i = 0; i < m.length; i++) { const o = m[i] * 3, d = i * 3; P[d] = src[o]; P[d + 1] = src[o + 1]; P[d + 2] = src[o + 2]; N[d] = nrm[o]; N[d + 1] = nrm[o + 1]; N[d + 2] = nrm[o + 2]; }
         pa.needsUpdate = na.needsUpdate = true;
       } else p.g.computeVertexNormals();
+      p.tubePositionsDirty = true;
       p.g.computeBoundingSphere();
     });
   }
@@ -569,17 +576,41 @@ export class KnitScene {
       this.seamMat.opacity = this.mode === 'pieces' ? 0.3 : 0.85;
     }
     if (this.dirtyTex.size && this.parts.length) { this.dirtyTex.forEach((n) => this.refreshTexture(n)); this.dirtyTex.clear(); }
-    this.updateFuzz(h);
+    this.updateYarnDetail(h);
     R.render(this.scene, this.camera);
   }
 
-  /** Stray fibres only show when stitches are big enough on screen to see them. */
-  private updateFuzz(hPx: number) {
+  /** Choose detail from stitch size and the amount of geometry in the camera frustum. */
+  private updateYarnDetail(hPx: number) {
     if (!this.doc) return;
     const pxPerIn = hPx / (2 * this.cam.dist * Math.tan((this.cam.fov * Math.PI) / 360));
     const on = pxPerIn / this.doc.built.sg > 5;
-    if (on === this.fuzzOn) return;
-    this.fuzzOn = on; this.parts.forEach((p) => p.shells.forEach((m) => { m.visible = on; }));
+    this.fuzzOn = on;
+    this.camera.updateMatrixWorld();
+    this.yarnFrustum.setFromProjectionMatrix(this.clipMatrix.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse));
+    const pixels = this.R.domElement.width * this.R.domElement.height;
+    for (const p of this.parts) {
+      const px = pxPerIn / p.P.sg;
+      let close = p.mesh.band && !p.fab.cloth.uniforms.uOvOn.value && px > (p.tubes?.group.visible ? 28 : 32);
+      if (Math.max(p.mesh.nx, p.mesh.ny) >= this.R.capabilities.maxTextureSize) close = false;
+      if (close && !p.tubes) {
+        p.tubes = yarnTubes(p.P, p.mesh, p.P.sg, p.P.rg);
+        p.tubePositionsDirty = true;
+        p.tubes.group.visible = false;
+        this.group!.add(p.tubes.group);
+      }
+      if (p.tubes) {
+        if (close && p.tubePositionsDirty) {
+          p.tubes.update(p.attr.array as Float32Array);
+          p.tubePositionsDirty = false;
+        }
+        if (close) close = p.tubes.visibleStitches(this.yarnFrustum) < pixels / (p.tubes.group.visible ? 85 : 105);
+        p.tubes.matLift.value = 0.38 * this.fades.mat.v;
+        p.tubes.group.visible = !!close;
+      }
+      p.meshes[0].visible = !close;
+      p.shells.forEach(m => { m.visible = on && !close; });
+    }
   }
 
   private updateGrabDot() {
@@ -618,7 +649,7 @@ export class KnitScene {
       else if (e.deltaMode !== 0 || Math.abs(e.deltaY) >= 50) padUntil = 0;
       return now < padUntil;
     };
-    const zoom = (f: number) => { const lim = this.mode === 'pieces' ? [6, 900] : [15, 260]; this.cam.dist = Math.min(lim[1], Math.max(lim[0], this.cam.dist * f)); };
+    const zoom = (f: number) => { const lim = this.mode === 'pieces' ? [6, 900] : [4, 260]; this.cam.dist = Math.min(lim[1], Math.max(lim[0], this.cam.dist * f)); };
     const ray = (cx: number, cy: number) => {
       const r = el.getBoundingClientRect();
       this.raycaster.setFromCamera(new THREE.Vector2(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1), this.camera);
