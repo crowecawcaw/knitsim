@@ -1017,8 +1017,8 @@ function makeSim(doc) {
     for (const x of a) for (const y of b) if (Math.abs(x - y) <= 2) return true;
     return false;
   };
-  const HS = 4093, hHead = new Int32Array(HS), hNext = new Int32Array(N);
-  const cellKey = (x, y, z) => ((((x * 73856093) ^ (y * 19349663) ^ (z * 83492791)) % HS) + HS) % HS;
+  const HS = 2 ** Math.ceil(Math.log2(Math.max(4096, N * 4))), hHead = new Int32Array(HS), hNext = new Int32Array(N);
+  const cellKey = (x, y, z) => (Math.imul(x, 73856093) ^ Math.imul(y, 19349663) ^ Math.imul(z, 83492791)) & (HS - 1);
   // stitch-graph pieces have a particle per stitch, far denser than needed to stop cloth passing cloth
   const selfOn = new Uint8Array(N).fill(1);
   parts.forEach(p => { if (p.mesh.graph) for (let k = 0; k < p.mesh.local.length; k++) selfOn[p.offset + k] = k % 3 === 0 ? 1 : 0; });
@@ -1065,13 +1065,14 @@ function makeSim(doc) {
   const caps = BODY.capsules.concat(feet);
   // bounding boxes (with the cloth thickness) to skip far capsules quickly
   const capBox = caps.map(c => { const r = Math.max(c.ra, c.rb) + 0.5; return [0, 1, 2].map(q => [Math.min(c.a[q], c.b[q]) - r, Math.max(c.a[q], c.b[q]) + r]); });
+  const SK = new Float32Array(ST.length);
   let time = 0;
   function step(dt, opts = {}) {
     time += dt;
     const assembleT = opts.assembleT ?? time;
     const grav = Math.min(1, Math.max(0, (assembleT - tGrav) / 1.4)) * 386 * 0.045; // inches/s² (softened)
     const damp = assembleT < tGrav + 1 ? 0.9 : 0.97;
-    const SK = new Float32Array(ST.length); let anyK = false;
+    let anyK = false;
     for (let c = 0; c < ST.length; c++) { SK[c] = stageOf(ST[c], assembleT); if (SK[c] > 0) anyK = true; }
     for (let i = 0; i < N; i++) {
       const ix = i * 3;

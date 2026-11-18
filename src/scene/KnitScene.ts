@@ -78,6 +78,7 @@ export class KnitScene {
   showSeams = true;
   private doc: KnitDoc | null = null;
   private knit: KnitState = { curPiece: null, progress: Infinity, selected: null };
+  private needsRender = true;
   private dirtyTex = new Set<string>();
 
   private R: THREE.WebGLRenderer;
@@ -192,7 +193,7 @@ export class KnitScene {
     this.knit = next;
   }
 
-  setShowSeams(v: boolean) { this.showSeams = v; }
+  setShowSeams(v: boolean) { this.showSeams = v; this.needsRender = true; }
 
   /** Screen space (px) covered by floating UI; the camera frames the knit in the rest. */
   setInsets(i: Insets) {
@@ -235,18 +236,24 @@ export class KnitScene {
 
   // ---------- build ----------
   private disposeGroup() {
-    this.parts.forEach((p) => p.gi?.dispose());
+    for (const p of this.parts) {
+      p.gi?.dispose();
+      p.tex.dispose();
+      p.fab.uniforms.uSt.value.dispose();
+      p.fab.uniforms.uRows.value.dispose();
+    }
     if (!this.group) return;
     this.scene.remove(this.group);
     this.group.traverse((o) => {
       const m = o as THREE.Mesh;
       if (m.geometry) m.geometry.dispose();
       const mat = m.material as THREE.MeshStandardMaterial | undefined;
-      if (mat && mat.map && mat.map !== this.mtex) mat.map.dispose();
+      if (mat && mat !== this.formMat) { mat.map?.dispose(); mat.dispose(); }
     });
   }
 
   private rebuild() {
+    this.needsRender = true;
     this.disposeGroup();
     this.group = new THREE.Group(); this.scene.add(this.group);
     this.parts = []; this.sim = null; this.posAssembled = null; this.tween = null; this.simRunning = false;
@@ -474,6 +481,7 @@ export class KnitScene {
     const host = this.host; const w = host.clientWidth, h = host.clientHeight; if (!w || !h) return;
     const R = this.R;
     if (!this.sized || R.domElement.width !== Math.floor(w * R.getPixelRatio()) || R.domElement.height !== Math.floor(h * R.getPixelRatio())) {
+      this.needsRender = true;
       R.setSize(w, h); this.applyViewOffset(w, h);
       if (!this.sized) {
         this.sized = true;
@@ -486,6 +494,9 @@ export class KnitScene {
     const now = performance.now(); const dt = Math.min(0.1, (now - (this.lastT || now)) / 1000); this.lastT = now;
     const s = this.sim;
     const moving = s && !this.tween && (this.simRunning || (this.mode === 'assembled' && (s.grab || now < this.relaxUntil)));
+    if (!this.needsRender && !moving && !this.tween && !this.camTween && !this.dirtyTex.size &&
+        !Object.values(this.fades).some(f => f.v !== f.t)) return;
+    this.needsRender = false;
     // Bound catch-up work after a slow frame, while keeping solver steps fixed.
     this.physicsRemainder = moving ? Math.min(this.physicsRemainder + dt, 2 / 60) : 0;
     const steps = Math.floor(this.physicsRemainder * 60);
@@ -628,6 +639,7 @@ export class KnitScene {
         el.style.cursor = hits(e.clientX, e.clientY).length ? 'grab' : '';
         return;
       }
+      this.needsRender = true;
       const [px, py] = pts.get(e.pointerId)!; pts.set(e.pointerId, [e.clientX, e.clientY]);
       const dx = e.clientX - px, dy = e.clientY - py; moved += Math.abs(dx) + Math.abs(dy);
       if (pts.size === 1 && grabbing) {
@@ -656,8 +668,9 @@ export class KnitScene {
       const was = pts.size; pts.delete(e.pointerId); if (pts.size < 2) last2 = null;
       if (was === 1 && moved < 6 && downAt) this.pick(hits(e.clientX, e.clientY));
     };
-    const cancel = (e: PointerEvent) => { pts.delete(e.pointerId); last2 = null; };
+    const cancel = (e: PointerEvent) => { moved = Infinity; up(e); };
     const wheel = (e: WheelEvent) => {
+      this.needsRender = true;
       e.preventDefault(); this.camTween = null;
       const pad = isPad(e);
       if (e.ctrlKey) zoom(1 + e.deltaY * 0.01); // pinch on a trackpad
