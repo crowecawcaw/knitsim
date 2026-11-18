@@ -185,16 +185,23 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
         <main className="kv-pattern" inert={big}>{pattern}</main>
 
         <aside className={'kv-preview' + (floating ? ' kv-floating' : '')} role={big ? 'dialog' : undefined} aria-modal={big || undefined} aria-label="Pattern preview">
+          {!big && <div className="kv-window-title" aria-hidden="true"><span>Pattern </span>Preview</div>}
           <div className="kv-stage">
             <Viewer ref={viewer} doc={doc} mode={mode} showSeams={finishing} knit={knit} firm seamLine={finishing ? pos.seamLine : undefined}
               onPick={(st) => big && setPicked({ doc, st })} panelOpen={false} chrome={NO_INSETS} />
-            {!big && <button className="kv-tap" ref={openButton} aria-label="Enlarge the preview" onClick={() => setBig(true)} />}
           </div>
           {!big && (
-            <div className="kv-cap">
-              {pieceTitle && <strong className="cap">{pieceTitle}</strong>}
-              <span>{caption}{piece && progress > 0 && progress < piece.total ? ` · ${progress} of ${piece.total} sts worked` : ''}</span>
-            </div>
+            <>
+              <div className="kv-cap">
+                {pieceTitle && <strong className="cap">{pieceTitle} · </strong>}
+                <span>{caption}{piece && progress > 0 && progress < piece.total ? ` · ${progress} of ${piece.total} sts worked` : ''}</span>
+              </div>
+              <button className="kv-tap" ref={openButton} aria-label="Enlarge the preview" aria-haspopup="dialog" onClick={() => setBig(true)}>
+                <span className="kv-maximize" aria-hidden="true">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 7V3h4m2 0h4v4m0 2v4H9m-2 0H3V9" /></svg>
+                </span>
+              </button>
+            </>
           )}
           {big && (
             <>

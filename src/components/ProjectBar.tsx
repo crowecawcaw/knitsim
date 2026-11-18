@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import type { Ui } from '../urlState';
 import { IconCheck, IconShare } from './Icons';
+import { YarnLogo } from './YarnLogo';
 
 export interface BarProps {
   name: string;
@@ -35,8 +36,10 @@ export function ProjectBar({ name, saved, saveState, ui, onUi, onRename, onBack,
     : 'Saved';
   return (
     <header className="bar">
-      <button className="icon-btn" title="All projects" aria-label="All projects" onClick={onBack}>
+      <button className="bar-back" title="All projects" aria-label="All projects" onClick={onBack}>
         <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        <YarnLogo />
+        <span>KnitSim</span>
       </button>
       <div className="bar-title">
         {onRename && saved
