@@ -1,3 +1,5 @@
+/// <reference types="node" />
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { EXAMPLES } from './examples';
 import { makeSim, runPattern } from '.';
@@ -15,6 +17,24 @@ function minLayerGap(sim: any) {
 }
 
 describe('cloth simulation', () => {
+  it.each(['hat', 'blanket'])('Wasm and JS agree during assembly and a tug on the %s', name => {
+    const module = new WebAssembly.Module(readFileSync(new URL('./cloth.wasm', import.meta.url)));
+    const doc = runPattern(example(name), {});
+    const reference = makeSim(doc), accelerated = makeSim(doc, module);
+    for (const sim of [reference, accelerated]) {
+      for (let i = 0; i < 240; i++) sim.step(1 / 60);
+      const grab = sim.startGrab(0)!;
+      grab.target[1] += 2;
+      sim.step(1 / 60);
+      sim.endGrab();
+      sim.step(1 / 60);
+    }
+    expect(accelerated.pos).toEqual(reference.pos);
+    accelerated.reset();
+    reference.reset();
+    expect(accelerated.pos).toEqual(reference.pos);
+  }, 30000);
+
   it('the two layers of a folded cowl do not pass through each other', () => {
     const sim: any = makeSim(runPattern(example('cowl'), {}));
     for (let t = 0; t < sim.settleT; t += 1 / 60) sim.step(1 / 60, { assembleT: t });

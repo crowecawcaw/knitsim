@@ -941,7 +941,7 @@ function samplePath(segs, t) {
 const SPOT_MAP = { front_left: 'front', front_right: 'front', shoulders: 'front', left_hand: 'left_arm', right_hand: 'right_arm',  waist: 'torso', left_leg: 'table', right_leg: 'table', crotch: 'table' };
 
 // ---------- Cloth simulation ----------
-function makeSim(doc) {
+function makeSim(doc, physicsModule: WebAssembly.Module | null = null) {
   const built = doc.built; const parts = [];
   let N = 0;
   built.order.forEach(P => {
@@ -952,12 +952,33 @@ function makeSim(doc) {
     parts.push({ P, mesh, offset: N, pos0, at }); N += mesh.local.length;
   });
   const partOf = {}; parts.forEach(p => partOf[p.P.name] = p);
-  const pos = new Float32Array(N * 3), prev = new Float32Array(N * 3);
-  parts.forEach(p => { pos.set(p.pos0, p.offset * 3); });
-  prev.set(pos);
+  const feet = [...new Set(parts.filter(p => p.at === 'left_foot' || p.at === 'right_foot').map(p => p.at))]
+    .flatMap(at => footCaps(at === 'left_foot' ? 1 : -1, parts.find(p => p.at === at).mesh.footK || 1));
+  const useTable = parts.some(p => p.at === 'table') || feet.length > 0;
+  const caps = BODY.capsules.concat(feet);
+  // bounding boxes (with the cloth thickness) to skip far capsules quickly
+  const capBox = caps.map(c => { const r = Math.max(c.ra, c.rb) + 0.5; return [0, 1, 2].map(q => [Math.min(c.a[q], c.b[q]) - r, Math.max(c.a[q], c.b[q]) + r]); });
+  const previousOffset = N * 3 * 4;
+  const capsuleOffset = previousOffset * 2;
+  const bytes = capsuleOffset + caps.length * 16 * 8;
+  const memory = physicsModule && new WebAssembly.Memory({ initial: Math.ceil(bytes / 65536) });
+  if (memory) {
+    const packed = new Float64Array(memory.buffer, capsuleOffset, caps.length * 16);
+    caps.forEach((c, i) => {
+      const axis = c.b.map((v, q) => v - c.a[q]);
+      packed.set([...capBox[i].flat(), ...c.a, ...axis, axis[0]**2 + axis[1]**2 + axis[2]**2,
+        c.ra, c.rb - c.ra, c.grip ? 0.95 : 0.5], i * 16);
+    });
+  }
+  const wasm = memory && new WebAssembly.Instance(physicsModule, { env: { memory } }).exports;
+  const pos = memory ? new Float32Array(memory.buffer, 0, N * 3) : new Float32Array(N * 3);
   const cons = [];
   parts.forEach(p => p.mesh.cons.forEach(([a, b, r, k, h]) => cons.push(a + p.offset, b + p.offset, r, k, h)));
-  const C = new Float32Array(cons); const CS = 5;
+  const CS = 5;
+  const C = new Float32Array(cons);
+  parts.forEach(p => { pos.set(p.pos0, p.offset * 3); });
+  const prev = memory ? new Float32Array(memory.buffer, previousOffset, pos.length) : new Float32Array(pos.length);
+  prev.set(pos);
   const seamPairs = [], pairStage = []; const seen = new Set();
   doc.seams.forEach(s => {
     if (!s.A || !s.B) return;
@@ -1017,8 +1038,8 @@ function makeSim(doc) {
     for (const x of a) for (const y of b) if (Math.abs(x - y) <= 2) return true;
     return false;
   };
-  const HS = 4093, hHead = new Int32Array(HS), hNext = new Int32Array(N);
-  const cellKey = (x, y, z) => ((((x * 73856093) ^ (y * 19349663) ^ (z * 83492791)) % HS) + HS) % HS;
+  const HS = 2 ** Math.ceil(Math.log2(Math.max(4096, N * 4))), hHead = new Int32Array(HS), hNext = new Int32Array(N);
+  const cellKey = (x, y, z) => (Math.imul(x, 73856093) ^ Math.imul(y, 19349663) ^ Math.imul(z, 83492791)) & (HS - 1);
   // stitch-graph pieces have a particle per stitch, far denser than needed to stop cloth passing cloth
   const selfOn = new Uint8Array(N).fill(1);
   parts.forEach(p => { if (p.mesh.graph) for (let k = 0; k < p.mesh.local.length; k++) selfOn[p.offset + k] = k % 3 === 0 ? 1 : 0; });
@@ -1053,25 +1074,20 @@ function makeSim(doc) {
       }
     }
   }
-  const feet = [...new Set(parts.filter(p => p.at === 'left_foot' || p.at === 'right_foot').map(p => p.at))]
-    .flatMap(at => footCaps(at === 'left_foot' ? 1 : -1, parts.find(p => p.at === at).mesh.footK || 1));
-  const useTable = parts.some(p => p.at === 'table') || feet.length > 0;
   const centred = parts.filter(p => p.at === 'head');
   const nStages = doc.nStages || 1;
   const STAGE_DT = 0.45, STAGE_LEN = 1.0;
   const tGrav = 0.2 + (nStages - 1) * STAGE_DT + STAGE_LEN;
   const stageK = new Float32Array(Math.ceil(nStages + 2) * 2);
   const stageOf = (stage, T) => { const u = Math.min(1, Math.max(0, (T - 0.2 - stage * STAGE_DT) / STAGE_LEN)); return u * u * (3 - 2 * u); };
-  const caps = BODY.capsules.concat(feet);
-  // bounding boxes (with the cloth thickness) to skip far capsules quickly
-  const capBox = caps.map(c => { const r = Math.max(c.ra, c.rb) + 0.5; return [0, 1, 2].map(q => [Math.min(c.a[q], c.b[q]) - r, Math.max(c.a[q], c.b[q]) + r]); });
+  const SK = new Float32Array(ST.length);
   let time = 0;
   function step(dt, opts = {}) {
     time += dt;
     const assembleT = opts.assembleT ?? time;
     const grav = Math.min(1, Math.max(0, (assembleT - tGrav) / 1.4)) * 386 * 0.045; // inches/s² (softened)
     const damp = assembleT < tGrav + 1 ? 0.9 : 0.97;
-    const SK = new Float32Array(ST.length); let anyK = false;
+    let anyK = false;
     for (let c = 0; c < ST.length; c++) { SK[c] = stageOf(ST[c], assembleT); if (SK[c] > 0) anyK = true; }
     for (let i = 0; i < N; i++) {
       const ix = i * 3;
@@ -1119,6 +1135,11 @@ function makeSim(doc) {
     }
   }
   function collide() {
+    if (wasm) {
+      wasm.collideParticles(N, previousOffset, capsuleOffset, caps.length, useTable,
+        TABLE.c[0], TABLE.c[2], TABLE.top, TABLE.depth, TABLE.r);
+      return;
+    }
     const th = 0.45;
     for (let i = 0; i < N; i++) {
       const ix = i * 3; let px = pos[ix], py = pos[ix + 1], pz = pos[ix + 2];

@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { BODY, TABLE, makeSim, type KnitDoc, type Piece, type Stitch } from '../knit';
 import { drawOverlay, pieceXY, rowExtents } from '../draw/stitches';
 import type { ViewMode } from '../urlState';
+import { yarnTubes } from './yarn';
 import { fabricMaterials, setFabricState, type FabricMats } from './fabric';
 
 // Match the look of the original (three r147, legacy lighting): hex colours are
@@ -27,6 +28,8 @@ interface Part {
   P: Piece; mesh: any; offset: number; idx: number;
   canvas: HTMLCanvasElement; tex: THREE.CanvasTexture;
   g: THREE.BufferGeometry; attr: THREE.BufferAttribute; meshes: THREE.Mesh[]; flatBox: Box;
+  tubes?: ReturnType<typeof yarnTubes>;
+  tubePositionsDirty?: boolean;
   fab: FabricMats; shells: THREE.Mesh[];
   /** stitch-graph parts: render vertex → sim vertex, and the indexed sim mesh used for normals */
   map?: Int32Array; gi?: THREE.BufferGeometry;
@@ -78,6 +81,7 @@ export class KnitScene {
   showSeams = true;
   private doc: KnitDoc | null = null;
   private knit: KnitState = { curPiece: null, progress: Infinity, selected: null };
+  private needsRender = true;
   private dirtyTex = new Set<string>();
 
   private R: THREE.WebGLRenderer;
@@ -107,13 +111,15 @@ export class KnitScene {
   private simRunning = false; private simT = 0; private relaxUntil = 0; private lastT = 0;
   private raf = 0;
   private fuzzOn = false;
+  private yarnFrustum = new THREE.Frustum();
+  private clipMatrix = new THREE.Matrix4();
   private cleanup: (() => void)[] = [];
 
   constructor(private host: HTMLElement, private statusEl: HTMLElement, private cb: SceneCallbacks) {
     // the canvas is transparent: the studio backdrop behind it is a CSS gradient (#view3d), so it stays put
     // while the camera orbits, the way a paper sweep behind a product shot does
     const R = (this.R = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true }));
-    R.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    R.setPixelRatio(this.fullPixelRatio);
     R.setClearColor(0x000000, 0);
     // filmic response: bright highlights roll off instead of clipping, shadows keep some colour
     R.toneMapping = THREE.ACESFilmicToneMapping;
@@ -121,7 +127,7 @@ export class KnitScene {
     host.prepend(R.domElement);
     const scene = this.scene;
     scene.add(new THREE.HemisphereLight(0xfff6e8, 0x8a7a68, 0.7 * LEGACY_LIGHT));
-    const d1 = new THREE.DirectionalLight(0xfff3e2, 1.0 * LEGACY_LIGHT); d1.position.set(20, 60, 35); scene.add(d1);
+    const d1 = new THREE.DirectionalLight(0xfff3e2, 1.0 * LEGACY_LIGHT); d1.position.set(50, 30, 22.5); scene.add(d1);
     const d2 = new THREE.DirectionalLight(0xdfe8ff, 0.25 * LEGACY_LIGHT); d2.position.set(-30, 10, -20); scene.add(d2);
     const d3 = new THREE.DirectionalLight(0xe6eeff, 0.35 * LEGACY_LIGHT); d3.position.set(8, 14, -28); scene.add(d3);
     // soft contact shadows on the floor, so the form and the table stand on something
@@ -184,7 +190,7 @@ export class KnitScene {
   }
 
   // ---------- public API ----------
-  setDoc(doc: KnitDoc) { this.doc = doc; this.rebuild(); }
+  setDoc(doc: KnitDoc, module: WebAssembly.Module | null) { this.doc = doc; this.rebuild(module); }
 
   setKnitState(next: KnitState) {
     const prev = this.knit;
@@ -192,7 +198,7 @@ export class KnitScene {
     this.knit = next;
   }
 
-  setShowSeams(v: boolean) { this.showSeams = v; }
+  setShowSeams(v: boolean) { this.showSeams = v; this.needsRender = true; }
 
   /** Screen space (px) covered by floating UI; the camera frames the knit in the rest. */
   setInsets(i: Insets) {
@@ -235,18 +241,26 @@ export class KnitScene {
 
   // ---------- build ----------
   private disposeGroup() {
-    this.parts.forEach((p) => p.gi?.dispose());
+    for (const p of this.parts) {
+      p.tubes?.texture.dispose();
+      p.gi?.dispose();
+      p.tex.dispose();
+      p.fab.cloth.uniforms.uLoopBins.value.dispose();
+      p.fab.uniforms.uSt.value.dispose();
+      p.fab.uniforms.uRows.value.dispose();
+    }
     if (!this.group) return;
     this.scene.remove(this.group);
     this.group.traverse((o) => {
       const m = o as THREE.Mesh;
       if (m.geometry) m.geometry.dispose();
       const mat = m.material as THREE.MeshStandardMaterial | undefined;
-      if (mat && mat.map && mat.map !== this.mtex) mat.map.dispose();
+      if (mat && mat !== this.formMat) { mat.map?.dispose(); mat.dispose(); }
     });
   }
 
-  private rebuild() {
+  private rebuild(module: WebAssembly.Module | null) {
+    this.needsRender = true;
     this.disposeGroup();
     this.group = new THREE.Group(); this.scene.add(this.group);
     this.parts = []; this.sim = null; this.posAssembled = null; this.tween = null; this.simRunning = false;
@@ -254,7 +268,7 @@ export class KnitScene {
     const doc = this.doc;
     if (!doc || !doc.seams) return;
     let sim: Sim;
-    try { sim = makeSim(doc); } catch (e) { console.error(e); this.statusEl.textContent = 'Could not build 3D: ' + (e as Error).message; return; }
+    try { sim = makeSim(doc, module); } catch (e) { console.error(e); this.statusEl.textContent = 'Could not build 3D: ' + (e as Error).message; return; }
     this.sim = sim; sim.parts.forEach((pt: Part, i: number) => { pt.idx = i; });
     this.parts = sim.parts;
     this.posAligned = new Float32Array(sim.pos);
@@ -347,6 +361,7 @@ export class KnitScene {
         for (let i = 0; i < m.length; i++) { const o = m[i] * 3, d = i * 3; P[d] = src[o]; P[d + 1] = src[o + 1]; P[d + 2] = src[o + 2]; N[d] = nrm[o]; N[d + 1] = nrm[o + 1]; N[d + 2] = nrm[o + 2]; }
         pa.needsUpdate = na.needsUpdate = true;
       } else p.g.computeVertexNormals();
+      p.tubePositionsDirty = true;
       p.g.computeBoundingSphere();
     });
   }
@@ -468,10 +483,16 @@ export class KnitScene {
     if (el.textContent !== txt) el.textContent = txt;
   }
 
+  private physicsRemainder = 0;
+  private readonly fullPixelRatio = Math.min(2, window.devicePixelRatio || 1);
+  private slowFrames = 0;
+  private idleSince = 0;
+
   private frame() {
     const host = this.host; const w = host.clientWidth, h = host.clientHeight; if (!w || !h) return;
     const R = this.R;
     if (!this.sized || R.domElement.width !== Math.floor(w * R.getPixelRatio()) || R.domElement.height !== Math.floor(h * R.getPixelRatio())) {
+      this.needsRender = true;
       R.setSize(w, h); this.applyViewOffset(w, h);
       if (!this.sized) {
         this.sized = true;
@@ -483,6 +504,28 @@ export class KnitScene {
     }
     const now = performance.now(); const dt = Math.min(0.1, (now - (this.lastT || now)) / 1000); this.lastT = now;
     const s = this.sim;
+    const moving = s && !this.tween && (this.simRunning || (this.mode === 'assembled' && (s.grab || now < this.relaxUntil)));
+    const active = this.needsRender || moving || this.tween || this.camTween || this.dirtyTex.size ||
+      Object.values(this.fades).some(f => f.v !== f.t);
+    if (active) {
+      // Count consecutive over-budget redraws. Ignore the interval after idle.
+      this.slowFrames = !this.idleSince && dt > 0.035 ? this.slowFrames + 1 : 0;
+      this.idleSince = 0;
+      if (this.slowFrames >= 3) {
+        const ratio = Math.max(this.fullPixelRatio * 0.4, R.getPixelRatio() * 0.75);
+        if (ratio < R.getPixelRatio()) R.setPixelRatio(ratio);
+        this.slowFrames = 0;
+      }
+    } else {
+      if (!this.idleSince) this.idleSince = now;
+      if (R.getPixelRatio() === this.fullPixelRatio || now - this.idleSince < 200) return;
+      R.setPixelRatio(this.fullPixelRatio);
+    }
+    this.needsRender = false;
+    // Bound catch-up work after a slow frame, while keeping solver steps fixed.
+    this.physicsRemainder = moving ? Math.min(this.physicsRemainder + dt, 2 / 60) : 0;
+    const steps = Math.floor(this.physicsRemainder * 60);
+    this.physicsRemainder -= steps / 60;
     if (s && this.tween) {
       const tw = this.tween; const u = Math.min(1, (now - tw.t0) / tw.dur); const P = s.pos; const n = this.parts.length;
       this.parts.forEach((part, i) => {
@@ -499,12 +542,14 @@ export class KnitScene {
       this.markDirty();
       if (u >= 1) { const d = tw.done; this.tween = null; d?.(); }
     } else if (s && !this.simRunning && (s.grab || now < this.relaxUntil) && this.mode === 'assembled') {
-      for (let k = 0; k < 2; k++) s.step(1 / 60, { assembleT: Math.max(this.simT, s.settleT) });
-      this.markDirty(); this.updateGrabDot();
+      for (let k = 0; k < steps; k++) s.step(1 / 60, { assembleT: Math.max(this.simT, s.settleT) });
+      if (steps) this.markDirty();
+      this.updateGrabDot();
     } else if (s && this.simRunning) {
-      for (let k = 0; k < 3; k++) { this.simT += 1 / 60; s.step(1 / 60, { assembleT: this.simT }); }
+      for (let k = 0; k < steps; k++) { this.simT += 1 / 60; s.step(1 / 60, { assembleT: this.simT }); }
       if (this.simT > s.settleT) { this.simRunning = false; this.posAssembled = new Float32Array(s.pos); }
-      this.markDirty(); this.updateStatus(); this.updateGrabDot();
+      if (steps) this.markDirty();
+      this.updateStatus(); this.updateGrabDot();
     }
     // camera
     if (this.camTween) {
@@ -531,17 +576,41 @@ export class KnitScene {
       this.seamMat.opacity = this.mode === 'pieces' ? 0.3 : 0.85;
     }
     if (this.dirtyTex.size && this.parts.length) { this.dirtyTex.forEach((n) => this.refreshTexture(n)); this.dirtyTex.clear(); }
-    this.updateFuzz(h);
+    this.updateYarnDetail(h);
     R.render(this.scene, this.camera);
   }
 
-  /** Stray fibres only show when stitches are big enough on screen to see them. */
-  private updateFuzz(hPx: number) {
+  /** Choose detail from stitch size and the amount of geometry in the camera frustum. */
+  private updateYarnDetail(hPx: number) {
     if (!this.doc) return;
     const pxPerIn = hPx / (2 * this.cam.dist * Math.tan((this.cam.fov * Math.PI) / 360));
     const on = pxPerIn / this.doc.built.sg > 5;
-    if (on === this.fuzzOn) return;
-    this.fuzzOn = on; this.parts.forEach((p) => p.shells.forEach((m) => { m.visible = on; }));
+    this.fuzzOn = on;
+    this.camera.updateMatrixWorld();
+    this.yarnFrustum.setFromProjectionMatrix(this.clipMatrix.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse));
+    const pixels = this.R.domElement.width * this.R.domElement.height;
+    for (const p of this.parts) {
+      const px = pxPerIn / p.P.sg;
+      let close = p.mesh.band && !p.fab.cloth.uniforms.uOvOn.value && px > (p.tubes?.group.visible ? 28 : 32);
+      if (Math.max(p.mesh.nx, p.mesh.ny) >= this.R.capabilities.maxTextureSize) close = false;
+      if (close && !p.tubes) {
+        p.tubes = yarnTubes(p.P, p.mesh, p.P.sg, p.P.rg);
+        p.tubePositionsDirty = true;
+        p.tubes.group.visible = false;
+        this.group!.add(p.tubes.group);
+      }
+      if (p.tubes) {
+        if (close && p.tubePositionsDirty) {
+          p.tubes.update(p.attr.array as Float32Array);
+          p.tubePositionsDirty = false;
+        }
+        if (close) close = p.tubes.visibleStitches(this.yarnFrustum) < pixels / (p.tubes.group.visible ? 85 : 105);
+        p.tubes.matLift.value = 0.38 * this.fades.mat.v;
+        p.tubes.group.visible = !!close;
+      }
+      p.meshes[0].visible = !close;
+      p.shells.forEach(m => { m.visible = on && !close; });
+    }
   }
 
   private updateGrabDot() {
@@ -580,7 +649,7 @@ export class KnitScene {
       else if (e.deltaMode !== 0 || Math.abs(e.deltaY) >= 50) padUntil = 0;
       return now < padUntil;
     };
-    const zoom = (f: number) => { const lim = this.mode === 'pieces' ? [6, 900] : [15, 260]; this.cam.dist = Math.min(lim[1], Math.max(lim[0], this.cam.dist * f)); };
+    const zoom = (f: number) => { const lim = this.mode === 'pieces' ? [6, 900] : [4, 260]; this.cam.dist = Math.min(lim[1], Math.max(lim[0], this.cam.dist * f)); };
     const ray = (cx: number, cy: number) => {
       const r = el.getBoundingClientRect();
       this.raycaster.setFromCamera(new THREE.Vector2(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1), this.camera);
@@ -619,6 +688,7 @@ export class KnitScene {
         el.style.cursor = hits(e.clientX, e.clientY).length ? 'grab' : '';
         return;
       }
+      this.needsRender = true;
       const [px, py] = pts.get(e.pointerId)!; pts.set(e.pointerId, [e.clientX, e.clientY]);
       const dx = e.clientX - px, dy = e.clientY - py; moved += Math.abs(dx) + Math.abs(dy);
       if (pts.size === 1 && grabbing) {
@@ -647,8 +717,9 @@ export class KnitScene {
       const was = pts.size; pts.delete(e.pointerId); if (pts.size < 2) last2 = null;
       if (was === 1 && moved < 6 && downAt) this.pick(hits(e.clientX, e.clientY));
     };
-    const cancel = (e: PointerEvent) => { pts.delete(e.pointerId); last2 = null; };
+    const cancel = (e: PointerEvent) => { moved = Infinity; up(e); };
     const wheel = (e: WheelEvent) => {
+      this.needsRender = true;
       e.preventDefault(); this.camTween = null;
       const pad = isPad(e);
       if (e.ctrlKey) zoom(1 + e.deltaY * 0.01); // pinch on a trackpad

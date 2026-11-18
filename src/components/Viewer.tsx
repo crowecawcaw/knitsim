@@ -1,7 +1,16 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import type { KnitDoc, Stitch } from '../knit';
 import { KnitScene, type KnitState } from '../scene/KnitScene';
+import physicsUrl from '../knit/cloth.wasm?url';
 import type { ViewMode } from '../urlState';
+
+let physicsModule: Promise<WebAssembly.Module | null> | undefined;
+function loadPhysics() {
+  return physicsModule ??= fetch(physicsUrl)
+    .then(response => response.arrayBuffer())
+    .then(bytes => WebAssembly.compile(bytes))
+    .catch(() => null); // The JS collision routine also works when Wasm is unavailable.
+}
 
 export interface ViewerHandle { fit: () => void; focusPiece: (name: string) => void }
 
@@ -40,7 +49,11 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer({ doc, mod
 
   // order matters: knit state first so the rebuilt textures include it
   useEffect(() => { scene.current?.setKnitState(knit); }, [knit]);
-  useEffect(() => { scene.current?.setDoc(doc); }, [doc]);
+  useEffect(() => {
+    let current = true;
+    void loadPhysics().then(module => { if (current) scene.current?.setDoc(doc, module); });
+    return () => { current = false; };
+  }, [doc]);
   useEffect(() => { scene.current?.setMode(mode); }, [mode]);
   useEffect(() => { scene.current?.setShowSeams(showSeams); }, [showSeams]);
 

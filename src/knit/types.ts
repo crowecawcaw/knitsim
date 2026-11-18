@@ -37,6 +37,7 @@ export interface Row {
 }
 
 export interface Piece {
+  sg: number; rg: number;
   name: string;
   round: boolean;
   line: number;
