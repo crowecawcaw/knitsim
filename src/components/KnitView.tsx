@@ -6,8 +6,9 @@ import { Viewer, type ViewerHandle } from './Viewer';
 import { Params } from './Params';
 import { Inspector } from './Inspector';
 import { ProjectBar } from './ProjectBar';
-import { WrittenPattern, stopsOf } from './WrittenPattern';
+import { PatternHeading, WrittenPattern, stopsOf } from './WrittenPattern';
 import { IconClose, IconNext, IconPrev } from './Icons';
+import { useStacked } from '../layout';
 import { useDoc, type ProjectViewProps } from './project';
 
 const NO_INSETS = { t: 0, b: 0, r: 0 };
@@ -17,8 +18,8 @@ const READ_AT = 0.35;
 /** stitches knitted by the end of row `r` */
 const endOf = (P: Piece, r: number) => { const row = P.rows[Math.min(r, P.rows.length - 1)]; return row ? row.firstOrd + row.order.length : 0; };
 
-interface ReadPos { piece: string | null; progress: number; id: string | null }
-const TOP: ReadPos = { piece: null, progress: Infinity, id: null };
+interface ReadPos { piece: string | null; progress: number; id: string | null; finishing: boolean; seamLine?: number }
+const TOP: ReadPos = { piece: null, progress: Infinity, id: null, finishing: false };
 
 /**
  * The knitter's interface: the pattern is the page. Scrolling it knits the preview along: the step at the
@@ -30,7 +31,9 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
   const { doc, runCode } = useDoc(code, params);
   const prose = useMemo(() => toProse(doc, runCode), [doc, runCode]);
   const stops = useMemo(() => stopsOf(prose), [prose]);
-  const names = doc.built.order.filter((p) => p.nrows).map((p) => p.name);
+  const stacked = useStacked();
+  const heading = useRef<HTMLDivElement>(null);
+  const [floating, setFloating] = useState(false);
 
   // ---- where the reader is: from scrolling, or pinned to a tapped step until they scroll on
   const scroller = useRef<HTMLDivElement>(null);
@@ -41,25 +44,43 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
 
   const measure = useCallback(() => {
     const el = scroller.current; if (!el) return;
+    const box = el.getBoundingClientRect();
+    const readingLine = box.top + box.height * READ_AT;
+    const heroBottom = heading.current?.getBoundingClientRect().bottom ?? box.top;
+    setFloating(heroBottom <= box.top + 16);
     if (pinned) {
       if (Math.abs(el.scrollTop - pinTop.current) < 40) return;
       setPinned(false);
     }
-    const box = el.getBoundingClientRect();
-    const line = box.top + box.height * READ_AT;
-    let cur: HTMLElement | null = null;
-    for (const u of el.querySelectorAll<HTMLElement>('[data-piece]')) {
-      if (u.getBoundingClientRect().top <= line) cur = u; else break;
+
+    let next = TOP;
+    for (const section of el.querySelectorAll<HTMLElement>('[data-pattern-piece], [data-finishing]')) {
+      if (section.getBoundingClientRect().top > readingLine) break;
+      if (section.hasAttribute('data-finishing')) {
+        next = { ...TOP, finishing: true };
+        for (const step of section.querySelectorAll<HTMLElement>('[data-source-line]')) {
+          if (step.getBoundingClientRect().top > readingLine) break;
+          next = { ...next, seamLine: Number(step.dataset.sourceLine), id: step.dataset.step! };
+        }
+        break;
+      }
+      const piece = doc.built.pieces[section.dataset.patternPiece!];
+      if (!piece) continue;
+      next = { ...TOP, piece: piece.name };
+      for (const step of section.querySelectorAll<HTMLElement>('[data-piece]')) {
+        const rect = step.getBoundingClientRect();
+        if (rect.top > readingLine) break;
+        const fraction = Math.max(0, Math.min(1, (readingLine - rect.top) / Math.max(1, rect.height)));
+        const from = Number(step.dataset.from);
+        const before = from > 0 ? endOf(piece, from - 1) : 0;
+        const after = endOf(piece, Number(step.dataset.to));
+        next = { ...next, progress: Math.round(before + fraction * (after - before)), id: step.dataset.step! };
+      }
     }
-    // above the first step: the finished piece, as a picture of what you'll make
-    if (!cur) { setPos((p) => (p === TOP ? p : TOP)); return; }
-    const P = doc.built.pieces[cur.dataset.piece!]; if (!P) return;
-    const r = cur.getBoundingClientRect();
-    const f = Math.max(0, Math.min(1, (line - r.top) / Math.max(1, r.height)));
-    const from = +cur.dataset.from!, to = +cur.dataset.to!;
-    const a = from > 0 ? endOf(P, from - 1) : 0, b = endOf(P, to);
-    const next: ReadPos = { piece: P.name, progress: Math.round(a + f * (b - a)), id: cur.dataset.step! };
-    setPos((p) => (p.piece === next.piece && p.progress === next.progress && p.id === next.id ? p : next));
+    setPos((prev) => (
+      prev.piece === next.piece && prev.progress === next.progress && prev.id === next.id
+        && prev.finishing === next.finishing && prev.seamLine === next.seamLine ? prev : next
+    ));
   }, [doc, pinned]);
 
   useEffect(() => {
@@ -74,9 +95,9 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
 
   const stop = stops.find((s) => s.id === sel) ?? null;
   const usePin = pinned && stop;
-  const pieceName = usePin ? stop.piece : pos.piece && names.includes(pos.piece) ? pos.piece : names[0] ?? null;
+  const pieceName = usePin ? stop.piece : pos.piece;
   const piece = pieceName ? doc.built.pieces[pieceName] : null;
-  const progress = !piece ? 0 : usePin ? endOf(piece, stop.row) : Math.min(pos.progress, piece.total);
+  const progress = !piece ? 0 : usePin ? endOf(piece, stop.row) : Math.min(Math.max(pos.progress, 1), piece.total);
 
   const pin = (id: string | null) => {
     setSel(id);
@@ -87,15 +108,21 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
 
   // ---- the preview: small beside the pattern, or full screen
   const [big, setBig] = useState(false);
-  const [bigMode, setBigMode] = useState<ViewMode>('pieces');
-  const mode: ViewMode = big ? bigMode : 'pieces';
+  const [choice, setChoice] = useState<{ section: string | null; mode: ViewMode } | null>(null);
+  const finishing = !usePin && pos.finishing;
+  const section = finishing ? 'finishing' : pieceName ? `piece:${pieceName}` : null;
+  const needs3D = finishing || piece?.round || doc.seams.some((s) =>
+    (s.kind === 'pickup' || s.kind === 'join') && s.a.split('.')[0] === pieceName);
+  const mode: ViewMode = choice && choice.section === section ? choice.mode : !piece || needs3D ? 'assembled' : 'pieces';
+  const setMode = (mode: ViewMode) => setChoice({ section, mode });
+  useEffect(() => setChoice(null), [section]);
   const [picked, setPicked] = useState<{ doc: unknown; st: Stitch } | null>(null);
   const selected = picked && picked.doc === doc ? picked.st : null;
   const knit = useMemo(() => ({ curPiece: pieceName, progress, selected }), [pieceName, progress, selected]);
 
   const viewer = useRef<ViewerHandle>(null);
   // keep the piece being read in frame
-  useEffect(() => { if (pieceName && mode === 'pieces') viewer.current?.focusPiece(pieceName); }, [pieceName, mode, doc, big]);
+  useEffect(() => { if (pieceName) viewer.current?.focusPiece(pieceName); else viewer.current?.fit(); }, [pieceName, mode, doc]);
   useEffect(() => {
     if (!big) { setPicked(null); return; }
     const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setBig(false); };
@@ -103,9 +130,10 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
   }, [big]);
 
   // full screen: step through the pattern, and keep the page in step behind it
-  const idx = stop ? stops.indexOf(stop) : -1;
+  const here = usePin ? stop : stops.find((s) => s.id === pos.id) ?? null;
+  const idx = here ? stops.indexOf(here) : -1;
   const go = (d: number) => {
-    const next = stops[idx < 0 ? 0 : Math.max(0, Math.min(stops.length - 1, idx + d))]; if (!next) return;
+    const next = stops[idx < 0 && finishing ? stops.length - 1 : Math.max(0, Math.min(stops.length - 1, idx + d))]; if (!next) return;
     const el = scroller.current;
     const li = el?.querySelector<HTMLElement>(`[data-step="${next.id}"]`);
     if (el && li) {
@@ -126,15 +154,24 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
             onSet={(name, v) => onChange({ params: { ...params, [name]: v } })}
             onReset={(name) => { const p = { ...params }; delete p[name]; onChange({ params: p }); }}
           />
-        : <p className="muted small">This pattern has no adjustable size or yarn.</p>}
+        : null}
+      version={doc.params.filter((p) => p.name === 'size' || p.type === 'color').map((p) => (
+        p.type === 'color' ? <span key={p.name} className="wp-swatch" title={p.label} style={{ background: String(p.value) }} />
+          : <span key={p.name} className="wp-version-size">{p.value}</span>
+      ))}
     />
     // eslint-disable-next-line react-hooks/exhaustive-deps
   ), [prose, errors, sel, usePin, pos.id, doc.params, params]);
 
-  const here = usePin ? stop : stops.find((s) => s.id === pos.id) ?? null;
   const pieceTitle = pieceName ? pieceName.replace(/_/g, ' ') : '';
-  const caption = here && piece && progress < piece.total ? here.label : 'Finished piece';
-  const words = stop ? spellOut(stop.text, stop.round) ?? stop.text : null;
+  const caption = finishing ? 'Finishing' : here ? here.label : piece ? 'Finished piece' : 'Finished project';
+  const modes = (
+    <div className="seg kv-modes" role="group" aria-label="Preview view">
+      <button aria-pressed={mode === 'assembled'} className={mode === 'assembled' ? 'on' : ''} onClick={() => setMode('assembled')}>3D view</button>
+      <button aria-pressed={mode === 'pieces'} className={mode === 'pieces' ? 'on' : ''} onClick={() => setMode('pieces')}>Piece view</button>
+    </div>
+  );
+  const words = here ? spellOut(here.text, here.round) ?? here.text : null;
 
   return (
     <div className={'kv' + (big ? ' kv-big' : '')}>
@@ -146,36 +183,35 @@ export function KnitView({ project, saved, saveState, view, onView, onChange, on
       />
       <div className="kv-body" ref={scroller}>
         <div className="kv-grid">
+        <div className="kv-heading wp" ref={heading}><PatternHeading prose={prose} /></div>
         <main className="kv-pattern">{pattern}</main>
 
-        <aside className="kv-preview" aria-label="Preview of the piece">
+        <aside className={'kv-preview' + (floating ? ' kv-floating' : '') + (stacked && floating ? ' kv-docked' : '')} aria-label="Pattern preview">
           <div className="kv-stage">
-            <Viewer ref={viewer} doc={doc} mode={mode} showSeams={big && bigMode !== 'pieces'} knit={knit}
+            <Viewer ref={viewer} doc={doc} mode={mode} showSeams={finishing} knit={knit} firm seamLine={finishing ? pos.seamLine : undefined}
               onPick={(st) => big && setPicked({ doc, st })} panelOpen={false} chrome={big ? { t: 70, b: 150, r: 0 } : NO_INSETS} />
             {!big && <button className="kv-tap" aria-label="Enlarge the preview" onClick={() => setBig(true)} />}
           </div>
           {!big && (
             <div className="kv-cap">
-              <strong className="cap">{pieceTitle}</strong>
+              {modes}
+              {pieceTitle && <strong className="cap">{pieceTitle}</strong>}
               <span>{caption}{piece && progress > 0 && progress < piece.total ? ` · ${progress} of ${piece.total} sts worked` : ''}</span>
             </div>
           )}
           {big && (
             <>
               <div className="kv-bigtop">
-                <div className="seg" role="tablist" aria-label="Show">
-                  <button role="tab" aria-selected={bigMode === 'pieces'} className={bigMode === 'pieces' ? 'on' : ''} onClick={() => setBigMode('pieces')}>This piece</button>
-                  <button role="tab" aria-selected={bigMode === 'assembled'} className={bigMode === 'assembled' ? 'on' : ''} onClick={() => setBigMode('assembled')}>Finished</button>
-                </div>
+                {modes}
                 <button className="icon-btn kv-close" aria-label="Close the preview" onClick={() => setBig(false)}><IconClose size={20} /></button>
               </div>
               <div className="kv-bigbottom">
                 <button className="icon-btn" aria-label="Previous step" disabled={idx === 0} onClick={() => go(-1)}><IconPrev /></button>
                 <div className="kv-bigtext">
-                  <strong><span className="cap">{pieceTitle}</span>{stop ? ` · ${stop.label}` : ''}</strong>
+                  <strong><span className="cap">{pieceTitle}</span>{here ? ` · ${here.label}` : caption}</strong>
                   <p>{words ?? 'Step through the pattern with the arrows, or tap a stitch to see how it’s made.'}</p>
                 </div>
-                <button className="icon-btn" aria-label="Next step" disabled={idx >= stops.length - 1} onClick={() => go(1)}><IconNext /></button>
+                <button className="icon-btn" aria-label="Next step" disabled={finishing || idx >= stops.length - 1} onClick={() => go(1)}><IconNext /></button>
               </div>
               {selected && <div className="kv-inspect"><Inspector doc={doc} stitch={selected} onClose={() => setPicked(null)} /></div>}
             </>

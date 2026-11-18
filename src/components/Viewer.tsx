@@ -9,6 +9,8 @@ interface Props {
   doc: KnitDoc;
   mode: ViewMode;
   showSeams: boolean;
+  firm?: boolean;
+  seamLine?: number;
   knit: KnitState;
   onPick: (st: Stitch) => void;
   /** the project cards are showing on the left */
@@ -18,7 +20,7 @@ interface Props {
 }
 
 /** Hosts the imperative three.js scene and forwards React state into it. */
-export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer({ doc, mode, showSeams, knit, onPick, panelOpen, chrome }, ref) {
+export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer({ doc, mode, showSeams, firm = false, seamLine, knit, onPick, panelOpen, chrome }, ref) {
   const host = useRef<HTMLDivElement>(null);
   const status = useRef<HTMLDivElement>(null);
   const scene = useRef<KnitScene | null>(null);
@@ -26,7 +28,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer({ doc, mod
   onPickRef.current = onPick;
 
   useEffect(() => {
-    const s = new KnitScene(host.current!, status.current!, { onPick: (st) => onPickRef.current(st) });
+    const s = new KnitScene(host.current!, status.current!, { onPick: (st) => onPickRef.current(st) }, firm);
     s.mode = mode; // initial mode from the URL, no transition
     scene.current = s;
     return () => { s.dispose(); scene.current = null; };
@@ -42,7 +44,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer({ doc, mod
   useEffect(() => { scene.current?.setKnitState(knit); }, [knit]);
   useEffect(() => { scene.current?.setDoc(doc); }, [doc]);
   useEffect(() => { scene.current?.setMode(mode); }, [mode]);
-  useEffect(() => { scene.current?.setShowSeams(showSeams); }, [showSeams]);
+  useEffect(() => { scene.current?.setShowSeams(showSeams, seamLine); }, [showSeams, seamLine]);
 
   useImperativeHandle(ref, () => ({
     fit: () => scene.current?.fit(),

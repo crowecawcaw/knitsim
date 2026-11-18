@@ -72,7 +72,7 @@ export interface Check {
   text: string;
 }
 
-export interface Seam { a: string; b: string; stage: number; hidden?: boolean }
+export interface Seam { a: string; b: string; stage: number; hidden?: boolean; kind?: string; line?: number; A?: { piece: string }[]; B?: { piece: string }[] }
 
 export interface KnitDoc {
   name: string;

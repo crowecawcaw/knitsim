@@ -78,6 +78,7 @@ export class KnitScene {
   showSeams = true;
   private doc: KnitDoc | null = null;
   private knit: KnitState = { curPiece: null, progress: Infinity, selected: null };
+  private seamLine?: number;
   private dirtyTex = new Set<string>();
 
   private R: THREE.WebGLRenderer;
@@ -109,7 +110,7 @@ export class KnitScene {
   private fuzzOn = false;
   private cleanup: (() => void)[] = [];
 
-  constructor(private host: HTMLElement, private statusEl: HTMLElement, private cb: SceneCallbacks) {
+  constructor(private host: HTMLElement, private statusEl: HTMLElement, private cb: SceneCallbacks, private firm = false) {
     // the canvas is transparent: the studio backdrop behind it is a CSS gradient (#view3d), so it stays put
     // while the camera orbits, the way a paper sweep behind a product shot does
     const R = (this.R = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true }));
@@ -190,9 +191,21 @@ export class KnitScene {
     const prev = this.knit;
     [prev.curPiece, prev.selected?.piece, next.curPiece, next.selected?.piece].forEach((n) => { if (n) this.dirtyTex.add(n); });
     this.knit = next;
+    const part = this.parts.find((p) => p.P.name === this.focused);
+    if (this.firm && this.mode === 'assembled' && part && next.curPiece === part.P.name && prev.curPiece === next.curPiece) {
+      const bucket = (progress: number) => Math.floor(40 * progress / Math.max(1, part.P.total));
+      if (bucket(prev.progress) !== bucket(next.progress)) {
+        const to = this.firmPreset();
+        this.tweenCam({ ...to, theta: this.cam.theta, phi: this.cam.phi }, 0.25);
+      }
+    }
   }
 
-  setShowSeams(v: boolean) { this.showSeams = v; }
+  setShowSeams(v: boolean, line?: number) {
+    this.showSeams = v;
+    this.seamLine = line;
+    if (this.firm) this.traceFirmSeam();
+  }
 
   /** Screen space (px) covered by floating UI; the camera frames the knit in the rest. */
   setInsets(i: Insets) {
@@ -201,15 +214,21 @@ export class KnitScene {
     this.insets = i; this.sized = false;
   }
 
-  fit(dur = 0.8) { this.focused = null; this.tweenCam(this.camPreset(this.mode), dur); }
+  fit(dur = 0.8) {
+    this.focused = null;
+    if (this.firm) this.showFirmShape();
+    else this.tweenCam(this.camPreset(this.mode), dur);
+  }
 
   focusPiece(name: string) {
-    if (this.mode !== 'pieces') return;
+    if (this.mode !== 'pieces' && !this.firm) return;
     this.focused = name;
+    if (this.firm) { this.showFirmShape(); return; }
     const c = this.focusPreset(); if (c) this.tweenCam(c, 0.8);
   }
 
   private focusPreset() {
+    if (this.firm && this.mode === 'assembled') return this.firmPreset();
     if (this.mode !== 'pieces' || !this.focused) return null;
     const part = this.parts.find((p) => p.P.name === this.focused); if (!part || !part.flatBox) return null;
     const b = part.flatBox;
@@ -221,6 +240,7 @@ export class KnitScene {
     this.focused = null;
     if (!this.sim) { this.mode = m; return; }
     const prev = this.mode; this.mode = m;
+    if (this.firm) { this.showFirmShape(); return; }
     this.simRunning = false;
     const lift = (prev === 'pieces') !== (m === 'pieces') ? 10 : 0;
     if (m === 'pieces') { this.animateTo(this.posFlat!, lift, 1.5); this.tweenCam(this.camPreset('pieces'), 1.6); }
@@ -254,7 +274,7 @@ export class KnitScene {
     const doc = this.doc;
     if (!doc || !doc.seams) return;
     let sim: Sim;
-    try { sim = makeSim(doc); } catch (e) { console.error(e); this.statusEl.textContent = 'Could not build 3D: ' + (e as Error).message; return; }
+    try { sim = makeSim(doc, this.firm); } catch (e) { console.error(e); this.statusEl.textContent = 'Could not build 3D: ' + (e as Error).message; return; }
     this.sim = sim; sim.parts.forEach((pt: Part, i: number) => { pt.idx = i; });
     this.parts = sim.parts;
     this.posAligned = new Float32Array(sim.pos);
@@ -269,6 +289,7 @@ export class KnitScene {
       part.canvas = document.createElement('canvas');
       part.tex = new THREE.CanvasTexture(part.canvas); part.tex.anisotropy = 8;
       const fm = fabricMaterials(part.P, part.mesh, doc.built.sg, doc.built.rg, part.tex);
+      fm.cloth.uniforms.uFirm.value = this.firm && this.mode === 'assembled' ? 1 : 0;
       const a = new THREE.Mesh(g, fm.cloth); a.userData.part = part;
       const shells = fm.shells.map((m) => { const sh = new THREE.Mesh(g, m); sh.raycast = () => {}; sh.renderOrder = 1; sh.visible = this.fuzzOn; return sh; });
       this.group!.add(a, ...shells); Object.assign(part, { g, attr, meshes: [a], idx, fab: fm, shells });
@@ -290,11 +311,12 @@ export class KnitScene {
     // seam threads
     const sp = new Float32Array(sim.seams.length * 3);
     const sg2 = new THREE.BufferGeometry(); const sattr = new THREE.BufferAttribute(sp, 3); sattr.setUsage(THREE.DynamicDrawUsage); sg2.setAttribute('position', sattr);
-    this.seamMat = new THREE.LineBasicMaterial({ color: 0xc0573e, transparent: true, opacity: 0.85 });
+    this.seamMat = new THREE.LineBasicMaterial({ color: 0xc0573e, transparent: true, opacity: 0.85, depthTest: !this.firm });
     this.seamLines = new THREE.LineSegments(sg2, this.seamMat); this.seamAttr = sattr; this.group.add(this.seamLines);
     // mat size
     const fb = this.flatBounds!; const mw = Math.max(fb.x1 - fb.x0, fb.z1 - fb.z0) * 4 + 120, md = mw;
-    this.mat.scale.set(mw, md, 1); this.mat.position.set((fb.x0 + fb.x1) / 2, MAT_Y - 0.05, (fb.z0 + fb.z1) / 2); this.mtex.repeat.set(mw / 12, md / 12);
+    if (sim.parts.length) this.mat.scale.set(mw, md, 1); this.mat.position.set((fb.x0 + fb.x1) / 2, MAT_Y - 0.05, (fb.z0 + fb.z1) / 2); this.mtex.repeat.set(mw / 12, md / 12);
+    if (this.firm) { this.showFirmShape(); return; }
     // put pieces where the current mode wants them, no animation
     sim.pos.set(this.mode === 'pieces' ? this.posFlat : this.posAligned);
     this.applyFades(true);
@@ -302,6 +324,117 @@ export class KnitScene {
     if (this.mode === 'assembled') this.startSim();
     if (!this.camSet) { this.camSet = true; Object.assign(this.cam, this.camPreset(this.mode)); }
     this.updateStatus();
+  }
+
+  private showFirmShape() {
+    const sim = this.sim;
+    if (!sim) return;
+    const flat = this.mode === 'pieces';
+    const active = this.parts.find((p) => p.P.name === this.focused);
+    const visible = new Set(this.focused ? [this.focused] : this.parts.map((p) => p.P.name));
+    const joins = this.doc?.seams.filter((s) => (s.kind === 'pickup' || s.kind === 'join') &&
+      s.a.split('.')[0] === this.focused) ?? [];
+    if (!flat) {
+      for (const seam of joins) {
+        for (const edge of [...(seam.A ?? []), ...(seam.B ?? [])]) visible.add(edge.piece);
+      }
+    }
+    // Close the joins in a short solve without gravity, then reuse the frozen shape.
+    const useAssembly = !active || joins.length > 0 || !active.P.round;
+    if (!flat && useAssembly && !this.posAssembled) {
+      sim.reset();
+      if (sim.seams.length || this.parts.some((p) => p.P.gather)) {
+        for (let i = 0; i < 20; i++) sim.step(1 / 60, { assembleT: sim.tGrav, iters: 5, firm: true });
+      }
+      this.posAssembled = new Float32Array(sim.pos);
+    }
+    sim.pos.set(flat ? this.posFlat : useAssembly ? this.posAssembled : this.posAligned);
+    if (!flat && active?.P.round && joins.length) {
+      // Keep the active tube firm while placing its base at the solved join.
+      const start = active.offset * 3;
+      const length = active.attr.array.length;
+      const shift = [0, 0, 0];
+      for (let i = start; i < start + length; i += 3) {
+        for (let axis = 0; axis < 3; axis++) shift[axis] += sim.pos[i + axis] - this.posAligned![i + axis];
+      }
+      for (let i = start; i < start + length; i += 3) {
+        const vertex = (i - start) / 3;
+        const height = active.mesh.graph ? active.mesh.sts[vertex].row / active.P.nrows : active.mesh.uv[2 * vertex + 1];
+        const blend = THREE.MathUtils.smoothstep(height, 0, 0.6);
+        for (let axis = 0; axis < 3; axis++) {
+          const firm = this.posAligned![i + axis] + shift[axis] / (length / 3);
+          sim.pos[i + axis] = THREE.MathUtils.lerp(sim.pos[i + axis], firm, blend);
+        }
+      }
+    }
+    for (const part of this.parts) {
+      part.meshes.forEach((mesh) => { mesh.visible = flat || visible.has(part.P.name); });
+      part.fab.cloth.uniforms.uFirm.value = flat ? 0 : 1;
+      const showFuzz = flat && this.fuzzOn;
+      part.shells.forEach((shell) => { shell.visible = showFuzz; });
+    }
+    this.markDirty();
+    this.traceFirmSeam();
+    this.applyFades(true);
+    this.camTween = null;
+    Object.assign(this.cam, this.focusPreset() ?? this.camPreset(this.mode));
+  }
+
+  private traceFirmSeam() {
+    const sim = this.sim;
+    const lines = this.seamLines;
+    const attr = this.seamAttr;
+    if (!sim || !lines || !attr) return;
+    lines.visible = this.showSeams && this.mode === 'assembled' && !!this.seamLine;
+    if (!lines.visible) return;
+
+    lines.frustumCulled = false;
+    const previous = new THREE.Vector3();
+    const midpoint = new THREE.Vector3();
+    const other = new THREE.Vector3();
+    let count = 0;
+    let continuing = false;
+    for (let i = 0; i < sim.seams.length; i += 2) {
+      if (sim.seamLines[i / 2] !== this.seamLine) { continuing = false; continue; }
+      midpoint.fromArray(sim.pos, 3 * sim.seams[i]);
+      other.fromArray(sim.pos, 3 * sim.seams[i + 1]);
+      midpoint.lerp(other, 0.5);
+      if (continuing) {
+        attr.setXYZ(count++, previous.x, previous.y, previous.z);
+        attr.setXYZ(count++, midpoint.x, midpoint.y, midpoint.z);
+      }
+      previous.copy(midpoint);
+      continuing = true;
+    }
+    lines.geometry.setDrawRange(0, count);
+    attr.needsUpdate = true;
+  }
+
+  private firmPreset(): Cam {
+    const bounds = new THREE.Box3();
+    const point = new THREE.Vector3();
+    const active = this.parts.find((p) => p.P.name === this.focused);
+    for (const part of active ? [active] : this.parts) {
+      const pos = part.attr.array;
+      const progress = this.knit.curPiece === part.P.name ? this.knit.progress : Infinity;
+      const nextRow = part.P.rows.findIndex((row) => row.firstOrd >= progress);
+      for (let i = 0; i < pos.length; i += 3) {
+        const vertex = i / 3;
+        const row = part.mesh.graph ? part.mesh.sts[vertex].row
+          : part.mesh.y0 + part.mesh.uv[vertex * 2 + 1] * part.mesh.H;
+        if (nextRow < 0 || row <= nextRow + (part.mesh.cr ?? 1)) bounds.expandByPoint(point.fromArray(pos, i));
+      }
+    }
+    if (bounds.isEmpty()) return this.camPreset('assembled');
+    const size = bounds.getSize(new THREE.Vector3());
+    const target = bounds.getCenter(new THREE.Vector3());
+    const onTable = active?.mesh.graph && (active.P.round || this.sim.feet.length) ||
+      (!active && this.sim.useTable);
+    return {
+      target, dist: Math.max(4, this.fitDist(size.x + 0.45 * size.z, Math.hypot(size.y, size.z), 38)),
+      phi: onTable ? 0.62 : active?.P.round ? 0.85 : 1.28,
+      theta: onTable ? 0.42 : 0.35, fov: 38,
+    };
   }
 
   /** Shelf-pack the flat pieces onto the mat (x right, rows run "up" the screen = −z). */
@@ -450,8 +583,8 @@ export class KnitScene {
   private startSim() { this.sim.reset(); this.simT = 0; this.simRunning = true; this.updateStatus(); }
   private applyFades(instant = false) {
     const m = this.mode; const f = this.fades;
-    f.form.t = m === 'pieces' ? 0 : 1; f.mat.t = m === 'pieces' ? 1 : 0; f.labels.t = f.mat.t;
-    f.table.t = m !== 'pieces' && this.sim && this.sim.useTable ? 1 : 0;
+    f.form.t = m === 'pieces' || this.firm ? 0 : 1; f.mat.t = m === 'pieces' ? 1 : 0; f.labels.t = f.mat.t;
+    f.table.t = !this.firm && m !== 'pieces' && this.sim && this.sim.useTable ? 1 : 0;
     if (instant) Object.values(f).forEach((x) => { x.v = x.t; });
   }
   private updateStatus() {
@@ -471,9 +604,10 @@ export class KnitScene {
   private frame() {
     const host = this.host; const w = host.clientWidth, h = host.clientHeight; if (!w || !h) return;
     const R = this.R;
-    if (!this.sized || R.domElement.width !== Math.floor(w * R.getPixelRatio()) || R.domElement.height !== Math.floor(h * R.getPixelRatio())) {
+    const resized = R.domElement.width !== Math.floor(w * R.getPixelRatio()) || R.domElement.height !== Math.floor(h * R.getPixelRatio());
+    if (!this.sized || resized) {
       R.setSize(w, h); this.applyViewOffset(w, h);
-      if (!this.sized) {
+      if (!this.sized || this.firm) {
         this.sized = true;
         const to = this.focusPreset() ?? this.camPreset(this.mode);
         // a flight in progress lands on the reframed view instead
@@ -523,7 +657,7 @@ export class KnitScene {
       f.mats.forEach((m, i) => { m.opacity = f.v * f.base[i]; m.visible = f.v > 0.01; });
     });
     // seam threads
-    if (s && this.seamAttr && this.seamLines && this.seamMat) {
+    if (!this.firm && s && this.seamAttr && this.seamLines && this.seamMat) {
       const SS = s.seams, P = s.pos, A = this.seamAttr.array as Float32Array;
       for (let i = 0; i < SS.length; i++) { A[i * 3] = P[SS[i] * 3]; A[i * 3 + 1] = P[SS[i] * 3 + 1]; A[i * 3 + 2] = P[SS[i] * 3 + 2]; }
       this.seamAttr.needsUpdate = true;
@@ -539,7 +673,7 @@ export class KnitScene {
   private updateFuzz(hPx: number) {
     if (!this.doc) return;
     const pxPerIn = hPx / (2 * this.cam.dist * Math.tan((this.cam.fov * Math.PI) / 360));
-    const on = pxPerIn / this.doc.built.sg > 5;
+    const on = (!this.firm || this.mode === 'pieces') && pxPerIn / this.doc.built.sg > 5;
     if (on === this.fuzzOn) return;
     this.fuzzOn = on; this.parts.forEach((p) => p.shells.forEach((m) => { m.visible = on; }));
   }
@@ -580,18 +714,18 @@ export class KnitScene {
       else if (e.deltaMode !== 0 || Math.abs(e.deltaY) >= 50) padUntil = 0;
       return now < padUntil;
     };
-    const zoom = (f: number) => { const lim = this.mode === 'pieces' ? [6, 900] : [15, 260]; this.cam.dist = Math.min(lim[1], Math.max(lim[0], this.cam.dist * f)); };
+    const zoom = (f: number) => { const lim = this.mode === 'pieces' ? [6, 900] : [this.firm ? 3 : 15, 260]; this.cam.dist = Math.min(lim[1], Math.max(lim[0], this.cam.dist * f)); };
     const ray = (cx: number, cy: number) => {
       const r = el.getBoundingClientRect();
       this.raycaster.setFromCamera(new THREE.Vector2(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1), this.camera);
       return this.raycaster;
     };
-    const hits = (cx: number, cy: number) => (this.parts.length ? ray(cx, cy).intersectObjects(this.parts.flatMap((p) => p.meshes), false) : []);
+    const hits = (cx: number, cy: number) => (this.parts.length ? ray(cx, cy).intersectObjects(this.parts.flatMap((p) => p.meshes.filter((mesh) => mesh.visible)), false) : []);
     let grabbing: { plane: THREE.Plane } | null = null;
     const down = (e: PointerEvent) => {
       el.setPointerCapture(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]); this.camTween = null; moved = 0; downAt = [e.clientX, e.clientY];
       if (pts.size === 2) { last2 = null; if (grabbing) { this.sim.endGrab(); grabbing = null; } }
-      if (pts.size === 1 && this.mode === 'assembled' && this.sim && !this.tween) {
+      if (pts.size === 1 && !this.firm && this.mode === 'assembled' && this.sim && !this.tween) {
         const h = hits(e.clientX, e.clientY)[0];
         if (h && h.face) {
           const part = h.object.userData.part as Part; const f = h.face; const P = this.sim.pos;
