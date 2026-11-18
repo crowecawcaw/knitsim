@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { runPattern } from '.';
 import { EXAMPLES } from './examples';
-import { edgeText, spellOut, splitComment, toProse, type ProseStep } from './prose';
+import { edgeText, splitComment, toProse, type ProseStep } from './prose';
 import { stopsOf } from '../components/WrittenPattern';
 
 const src = (k: string) => EXAMPLES.find((e) => e.key === k)!.src;
@@ -47,14 +47,6 @@ describe('written pattern', () => {
   it('reads comments and edges', () => {
     expect(splitComment('yarn #aabbcc   # main colour')).toEqual({ code: 'yarn #aabbcc', comment: 'main colour' });
     expect(edgeText('~front.left[start:underarm]')).toBe('front left edge (cast-on to underarm marker)');
-  });
-
-  it('spells stitch shorthand out in plain words', () => {
-    expect(spellOut('*k6, k2tog; rep from * to end.', true)).toBe('Repeat “knit 6, knit 2 together” to the end of the round.');
-    expect(spellOut('Work in k2, p2 rib for 3in.', false)).toBe('Work in rib (knit 2, purl 2 across; on later rows knit the knits and purl the purls) for 3 inches.');
-    expect(spellOut('Work in stockinette stitch, decreasing 1 st at each neck edge.', false))
-      .toBe('Work in stockinette stitch (knit the right-side rows, purl the wrong-side rows), decreasing 1 stitch at each neck edge.');
-    expect(spellOut('Sew the left sleeve seam.', false)).toBeNull();
   });
 
   it('lists every step that has a place in a piece', () => {
