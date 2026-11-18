@@ -298,7 +298,6 @@ export class KnitScene {
       part.canvas = document.createElement('canvas');
       part.tex = new THREE.CanvasTexture(part.canvas); part.tex.anisotropy = 8;
       const fm = fabricMaterials(part.P, part.mesh, doc.built.sg, doc.built.rg, part.tex);
-      fm.cloth.uniforms.uFirm.value = this.firm && this.mode === 'assembled' ? 1 : 0;
       const a = new THREE.Mesh(g, fm.cloth); a.userData.part = part;
       const shells = fm.shells.map((m) => { const sh = new THREE.Mesh(g, m); sh.raycast = () => {}; sh.renderOrder = 1; sh.visible = this.fuzzOn; return sh; });
       this.group!.add(a, ...shells); Object.assign(part, { g, attr, meshes: [a], idx, fab: fm, shells });
@@ -362,13 +361,12 @@ export class KnitScene {
       part.meshes.forEach((mesh) => { mesh.visible = visible; });
       part.label.visible = visible;
       const cloth = part.fab.cloth;
-      cloth.uniforms.uFirm.value = flat ? 0 : 1;
       cloth.uniforms.uContext.value = context ? 1 : 0;
       cloth.transparent = context;
       cloth.depthWrite = !context;
       const side = context ? THREE.FrontSide : THREE.DoubleSide;
       if (cloth.side !== side) { cloth.side = side; cloth.needsUpdate = true; }
-      const showFuzz = flat && visible && this.fuzzOn;
+      const showFuzz = visible && !context && this.fuzzOn;
       part.shells.forEach((shell) => { shell.visible = showFuzz; });
     }
     this.markDirty();
@@ -705,9 +703,9 @@ export class KnitScene {
   private updateFuzz(hPx: number) {
     if (!this.doc) return;
     const pxPerIn = hPx / (2 * this.cam.dist * Math.tan((this.cam.fov * Math.PI) / 360));
-    const on = (!this.firm || this.mode === 'pieces') && pxPerIn / this.doc.built.sg > 5;
+    const on = pxPerIn / this.doc.built.sg > 5;
     if (on === this.fuzzOn) return;
-    this.fuzzOn = on; this.parts.forEach((p) => p.shells.forEach((m) => { m.visible = on && p.meshes[0].visible; }));
+    this.fuzzOn = on; this.parts.forEach((p) => p.shells.forEach((m) => { m.visible = on && p.meshes[0].visible && !p.fab.cloth.transparent; }));
   }
 
   private updateGrabDot() {

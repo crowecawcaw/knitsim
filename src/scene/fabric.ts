@@ -85,7 +85,7 @@ const vec3 SKY = vec3(0.24, 0.25, 0.27), GROUND = vec3(0.07, 0.06, 0.05);
 
 const FRAG = COMMON + LIGHTING + /* glsl */ `
 uniform float uR, uD, uHgt, uTw;
-uniform sampler2D uOv; uniform float uOvOn, uFirm, uContext;
+uniform sampler2D uOv; uniform float uOvOn, uContext;
 uniform vec3 uSelCol;
 
 // one knit loop, in stitch widths: starts and ends low behind the fabric (the sinker loops
@@ -175,7 +175,7 @@ void main() {
   vec3 V = normalize(cameraPosition - vWorld);
 
   vec3 col;
-  float detail = (1.0 - uFirm) * (1.0 - smoothstep(0.22, 0.5, foot));
+  float detail = 1.0 - smoothstep(0.22, 0.5, foot);
   Hit best; best.h = -1e9;
   if (detail > 0.0) {
     for (int dr = 0; dr < 2; dr++) {
@@ -221,10 +221,11 @@ void main() {
   vec3 baseF = unpackCol(Sc.r);
   if (abs(Sc.a - uSelOrd) < 0.5) baseF = mix(baseF, uSelCol, 0.55);
   float purl = ((int(Sc.g) & 2) != 0) == gl_FrontFacing ? 1.0 : 0.0;
-  // the stitch texture, filtered: columns of Vs (knit) or ridges (purl) that fade out once they're under a pixel
-  float tex = 1.0 - smoothstep(0.35, 0.9, foot);
-  float ridge = purl > 0.5 ? cos(6.2831853 * rf * 2.0) : cos(6.2831853 * (xc + 0.5)) * 0.7 + cos(6.2831853 * rf) * 0.3;
-  baseF *= 1.0 + 0.1 * (1.0 - uFirm) * ridge * tex;
+  // Filter columns and rows separately so their different spacing holds up at a distance.
+  float rowPhase = rf * mix(1.0, 2.0, purl);
+  float rowRidge = cos(6.2831853 * rowPhase) * (1.0 - smoothstep(0.22, 0.5, fwidth(rf) * mix(1.0, 2.0, purl)));
+  float columnRidge = cos(6.2831853 * (xc + 0.5)) * (1.0 - smoothstep(0.22, 0.5, fwidth(xc)));
+  baseF *= 1.0 + 0.1 * mix(0.7 * columnRidge + 0.3 * rowRidge, rowRidge, purl);
   vec3 tfF = normalize(Tv);
   vec3 far = (shade(L0, C0, Ng, V, tfF, baseF) * 0.9 + shade(L1, C1, Ng, V, tfF, baseF) + shade(L2, C2, Ng, V, tfF, baseF)
             + baseF * mix(GROUND, SKY, Ng.y * 0.5 + 0.5)) * mix(0.86, 0.72, purl);
@@ -232,20 +233,8 @@ void main() {
   far += baseF * pow(1.0 - max(dot(Ng, V), 0.0), 3.0) * 0.22;
   if (!shown(Sc) && detail <= 0.0) discard;
   col = mix(far, near, detail);
-  if (uFirm > 0.5) {
-    // Matte relief follows knit columns and purl ridges without drawing individual loops.
-    float phase = 6.2831853 * (purl > 0.5 ? rf * 2.0 : xc);
-    vec3 across = purl > 0.5 ? Tv : Tu;
-    float relief = tex * (1.0 - uContext);
-    vec3 n = normalize(Ng + across * sin(phase) * 0.26 * relief);
-    float key = 0.34 + 0.72 * max(0.0, dot(n, L0));
-    float rim = pow(1.0 - clamp(dot(Ng, V), 0.0, 1.0), 3.0);
-    col = baseF * (key + 0.14 * rim) * (1.0 + 0.09 * cos(phase) * relief);
-    col *= gl_FrontFacing ? 1.0 : 0.62;
-    col = mix(col, vec3(dot(col, vec3(0.2126, 0.7152, 0.0722))), uContext * 0.75);
-  }
   if (uOvOn > 0.5 && gl_FrontFacing) { vec4 ov = texture2D(uOv, vUv); col = mix(col, srgb2lin(ov.rgb), ov.a); }
-  gl_FragColor = vec4(col, mix(1.0, 0.26, uContext));
+  gl_FragColor = vec4(col, mix(1.0, 0.48, uContext));
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }`;
@@ -291,7 +280,7 @@ export function fabricMaterials(P: Piece, mesh: MeshLike, sg: number, rg: number
   };
   const cloth = new THREE.ShaderMaterial({
     uniforms: { ...shared, uLift: { value: 0 }, uR: { value: 0.18 }, uD: { value: 0.2 }, uHgt: { value: 0.74 }, uTw: { value: 9 },
-      uOv: { value: overlay }, uOvOn: { value: 0 }, uFirm: { value: 0 }, uContext: { value: 0 }, uSelCol: { value: new THREE.Color(0x8a6fd1).convertSRGBToLinear() } },
+      uOv: { value: overlay }, uOvOn: { value: 0 }, uContext: { value: 0 }, uSelCol: { value: new THREE.Color(0x8a6fd1).convertSRGBToLinear() } },
     vertexShader: VERT, fragmentShader: FRAG, side: THREE.DoubleSide,
   });
   const fuzzLen = 0.32 / sg; // ~1.8 yarn radii
