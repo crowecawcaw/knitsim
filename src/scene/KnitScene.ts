@@ -121,7 +121,7 @@ export class KnitScene {
     host.prepend(R.domElement);
     const scene = this.scene;
     scene.add(new THREE.HemisphereLight(0xfff6e8, 0x8a7a68, 0.7 * LEGACY_LIGHT));
-    const d1 = new THREE.DirectionalLight(0xfff3e2, 1.0 * LEGACY_LIGHT); d1.position.set(20, 60, 35); scene.add(d1);
+    const d1 = new THREE.DirectionalLight(0xfff3e2, 1.0 * LEGACY_LIGHT); d1.position.set(50, 30, 22.5); scene.add(d1);
     const d2 = new THREE.DirectionalLight(0xdfe8ff, 0.25 * LEGACY_LIGHT); d2.position.set(-30, 10, -20); scene.add(d2);
     const d3 = new THREE.DirectionalLight(0xe6eeff, 0.35 * LEGACY_LIGHT); d3.position.set(8, 14, -28); scene.add(d3);
     // soft contact shadows on the floor, so the form and the table stand on something
@@ -468,6 +468,8 @@ export class KnitScene {
     if (el.textContent !== txt) el.textContent = txt;
   }
 
+  private physicsRemainder = 0;
+
   private frame() {
     const host = this.host; const w = host.clientWidth, h = host.clientHeight; if (!w || !h) return;
     const R = this.R;
@@ -483,6 +485,11 @@ export class KnitScene {
     }
     const now = performance.now(); const dt = Math.min(0.1, (now - (this.lastT || now)) / 1000); this.lastT = now;
     const s = this.sim;
+    const moving = s && !this.tween && (this.simRunning || (this.mode === 'assembled' && (s.grab || now < this.relaxUntil)));
+    // Bound catch-up work after a slow frame, while keeping solver steps fixed.
+    this.physicsRemainder = moving ? Math.min(this.physicsRemainder + dt, 2 / 60) : 0;
+    const steps = Math.floor(this.physicsRemainder * 60);
+    this.physicsRemainder -= steps / 60;
     if (s && this.tween) {
       const tw = this.tween; const u = Math.min(1, (now - tw.t0) / tw.dur); const P = s.pos; const n = this.parts.length;
       this.parts.forEach((part, i) => {
@@ -499,12 +506,14 @@ export class KnitScene {
       this.markDirty();
       if (u >= 1) { const d = tw.done; this.tween = null; d?.(); }
     } else if (s && !this.simRunning && (s.grab || now < this.relaxUntil) && this.mode === 'assembled') {
-      for (let k = 0; k < 2; k++) s.step(1 / 60, { assembleT: Math.max(this.simT, s.settleT) });
-      this.markDirty(); this.updateGrabDot();
+      for (let k = 0; k < steps; k++) s.step(1 / 60, { assembleT: Math.max(this.simT, s.settleT) });
+      if (steps) this.markDirty();
+      this.updateGrabDot();
     } else if (s && this.simRunning) {
-      for (let k = 0; k < 3; k++) { this.simT += 1 / 60; s.step(1 / 60, { assembleT: this.simT }); }
+      for (let k = 0; k < steps; k++) { this.simT += 1 / 60; s.step(1 / 60, { assembleT: this.simT }); }
       if (this.simT > s.settleT) { this.simRunning = false; this.posAssembled = new Float32Array(s.pos); }
-      this.markDirty(); this.updateStatus(); this.updateGrabDot();
+      if (steps) this.markDirty();
+      this.updateStatus(); this.updateGrabDot();
     }
     // camera
     if (this.camTween) {

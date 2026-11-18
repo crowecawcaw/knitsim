@@ -74,7 +74,7 @@ const LIGHTING = /* glsl */ `
 // a soft studio setup: a warm key high on the right, a dim cool fill from the left, a rim light from behind
 // that picks out the silhouette and the fuzz, and a little sky / floor bounce. Linear values; the renderer
 // tone-maps the result (ACES), so the key can be bright without clipping.
-const vec3 L0 = vec3(0.2857, 0.8571, 0.5);   // key, matches the scene's main light
+const vec3 L0 = vec3(0.80, 0.48, 0.36);   // key, matches the scene's main light
 const vec3 L1 = vec3(-0.8018, 0.2673, -0.5345);
 const vec3 L2 = vec3(0.3, 0.45, -0.84);
 const vec3 C0 = vec3(1.0, 0.94, 0.85) * 1.55;
@@ -102,39 +102,31 @@ vec3 loopP(float s, float lean, float bo, float zs) {
 
 struct Hit { float h; vec3 n; vec3 t; float s; float th; vec4 S; };
 
-// strands of one stitch over point p: the closest point on each half of the loop
-void probe(vec2 p, vec4 S, float zs, inout Hit best) {
+// Project short sections of the yarn into the view ray's tangent plane.
+void probe(vec2 p, vec4 S, float zs, vec2 slope, inout Hit best) {
   int fl = int(S.g);
   float lean = (fl & 4) != 0 ? -1.0 : (fl & 8) != 0 ? 1.0 : 0.0;
   float bo = (fl & 16) != 0 ? 1.0 : 0.0;
   float z0 = (fl & 2) != 0 ? -zs : zs;
-  // quarters: each is nearly monotonic, so its closest point is the only one covering p
-  for (int q = 0; q < 4; q++) {
-    float s0 = float(q) * 0.25, bs = s0, bd = 1e9;
-    for (int k = 0; k <= 4; k++) {
-      float s = s0 + float(k) / 16.0;
-      vec2 d = p - loopP(s, lean, bo, z0).xy; float dd = dot(d, d);
-      if (dd < bd) { bd = dd; bs = s; }
+  vec3 a = loopP(0.0, lean, bo, z0);
+  for (int k = 1; k <= 20; k++) {
+    vec3 b = loopP(float(k) / 20.0, lean, bo, z0);
+    vec3 strand = b - a;
+    vec2 start = a.xy - slope * a.z;
+    vec2 axis = strand.xy - slope * strand.z;
+    float t = clamp(dot(p - start, axis) / max(dot(axis, axis), 1e-6), 0.0, 1.0);
+    vec2 e = p - start - t * axis;
+    float radius2 = uR * uR - dot(e, e);
+    if (radius2 > 0.0) {
+      float hz = sqrt(radius2);
+      float h = a.z + strand.z * t + hz;
+      if (h > best.h) {
+        best.h = h; best.n = normalize(vec3(e, hz)); best.t = normalize(strand);
+        best.s = (float(k - 1) + t) / 20.0; best.S = S;
+        best.th = atan(dot(normalize(vec2(-strand.y, strand.x)), e), hz);
+      }
     }
-    // refine: two Newton steps on the squared distance
-    for (int k = 0; k < 2; k++) {
-      vec2 c = loopP(bs, lean, bo, z0).xy, c1 = loopP(bs + 0.004, lean, bo, z0).xy, c0 = loopP(bs - 0.004, lean, bo, z0).xy;
-      vec2 d1 = (c1 - c0) / 0.008, d2 = (c1 - 2.0 * c + c0) / (0.004 * 0.004);
-      vec2 e = c - p;
-      float g = dot(e, d1), H = dot(d1, d1) + dot(e, d2);
-      bs = clamp(bs - g / max(H, 1e-4), s0 - 0.01, s0 + 0.26);
-    }
-    vec3 C = loopP(bs, lean, bo, z0);
-    vec2 e = p - C.xy; float d = length(e);
-    if (d >= uR) continue;
-    float hz = sqrt(uR * uR - d * d);
-    float h = C.z + hz;
-    if (h > best.h) {
-      vec3 Ta = loopP(bs + 0.004, lean, bo, z0) - loopP(bs - 0.004, lean, bo, z0);
-      best.h = h; best.n = normalize(vec3(e, hz)); best.t = normalize(Ta); best.s = bs; best.S = S;
-      vec2 tn = normalize(Ta.xy); float side = tn.x * e.y - tn.y * e.x;
-      best.th = atan(side, hz);
-    }
+    a = b;
   }
 }
 
@@ -174,6 +166,8 @@ void main() {
   float foot = max(length(vec2(dsx.x, dsy.x)), length(vec2(dsx.y, dsy.y)) * uAsp);
   vec3 V = normalize(cameraPosition - vWorld);
 
+  vec2 slope = vec2(dot(V, Tu), dot(V, Tv)) / max(dot(V, Ng), 0.45);
+  slope *= 0.85 / max(1.0, length(slope));
   vec3 col;
   float detail = 1.0 - smoothstep(0.22, 0.5, foot);
   Hit best; best.h = -1e9;
@@ -185,8 +179,8 @@ void main() {
         int i = i0 + dc; if (i < 0 || i >= uCols) continue;
         vec4 S = stT(i, r); if (!shown(S)) continue;
         vec2 p = vec2(xr - (R.x + float(i) + S.b), (rf - float(r)) * uAsp);
-        if (abs(p.x) > 0.95 || abs(p.y) > (uHgt * uAsp + uR + 0.05)) continue;
-        probe(p, S, zs, best);
+        if (abs(p.x) > 0.95 || abs(p.y) > (uHgt * uAsp + uR + uD)) continue;
+        probe(p, S, zs, slope, best);
       }
     }
   }
@@ -199,7 +193,7 @@ void main() {
     // three plies twisting along the strand, each a bundle of fibres
     float ph = best.th * (3.0 / 6.2831853) + best.s * uTw;
     float f = fract(ph);
-    float ply = smoothstep(0.0, 0.22, f) * smoothstep(1.0, 0.78, f);
+    float ply = smoothstep(0.0, 0.22, f) * (1.0 - smoothstep(0.78, 1.0, f));
     vec3 side = normalize(cross(n, ty));
     n = normalize(n + side * (0.5 - f) * 0.8 * detail);
     vec3 tf = normalize(ty * 0.8 + side * 0.6);
@@ -287,7 +281,7 @@ export function fabricMaterials(P: Piece, mesh: MeshLike, sg: number, rg: number
     const k = (i + 1) / FUZZ_SHELLS;
     return new THREE.ShaderMaterial({
       uniforms: { ...shared, uLift: { value: k * fuzzLen }, uShell: { value: k }, uFz: { value: 22 } },
-      vertexShader: VERT, fragmentShader: FUZZ_FRAG, side: THREE.DoubleSide, transparent: true, depthWrite: false,
+      forceSinglePass: true, vertexShader: VERT, fragmentShader: FUZZ_FRAG, side: THREE.DoubleSide, transparent: true, depthWrite: false,
     });
   });
   return { cloth, shells, uniforms: shared, data };
