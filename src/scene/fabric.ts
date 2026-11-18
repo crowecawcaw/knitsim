@@ -9,7 +9,7 @@ import { rowExtents } from '../draw/stitches';
 interface MeshLike { W: number; H: number; x0: number; y0: number; band?: boolean; graph?: boolean }
 
 const F_EXISTS = 1, F_PURL = 2, F_LEANL = 4, F_LEANR = 8, F_BO = 16;
-export const FUZZ_SHELLS = 6;
+export const FUZZ_SHELLS = 3;
 
 /** Per-piece stitch tables: one texel per stitch (row, index from the row's first stitch). */
 export function fabricData(P: Piece) {
@@ -83,22 +83,57 @@ const vec3 C2 = vec3(0.85, 0.9, 1.0) * 0.55;
 const vec3 SKY = vec3(0.24, 0.25, 0.27), GROUND = vec3(0.07, 0.06, 0.05);
 `;
 
+// Curve samples are identical for all fragments. Bake the periodic terms once.
+const loopSegments = 20;
+const loopSamples = Array.from({ length: loopSegments + 1 }, (_, k) => {
+  const t = k / loopSegments, angle = 2 * Math.PI * t;
+  return [t - 0.5 + 0.24 * Math.sin(2 * angle), -Math.cos(angle), -Math.cos(2 * angle)];
+});
+
+const yarnRadius = 0.18, loopDepth = 0.2, loopHeight = 0.74, maxSlope = 0.85;
+const binCount = 16;
+
+// Each bin stores the inclusive segment range for each half-loop. Expand the
+// bounds by yarn thickness and maximum parallax so all camera angles are covered.
+function loopBins(aspect: number) {
+  const variants = 6; // three lean directions × ordinary or bound off
+  const data = new Uint8Array(binCount * binCount * variants * 4);
+  const extentY = (loopHeight + 0.1) * aspect + yarnRadius + maxSlope * loopDepth;
+  for (let variant = 0; variant < variants; variant++) {
+    const lean = variant % 3 - 1, bound = variant >= 3;
+    const points = loopSamples.map(([x, y, z]) => [
+      x + lean * 0.1 * (y + 1),
+      ((bound ? 0.42 : 1) * loopHeight * y + (bound ? 0.1 : 0)) * aspect,
+      z * loopDepth * (bound ? 0.5 : 1),
+    ]);
+    for (let k = 1; k <= loopSegments; k++) {
+      const a = points[k - 1], b = points[k];
+      const margin = yarnRadius + maxSlope * Math.max(Math.abs(a[2]), Math.abs(b[2])) + 1e-5;
+      const bin = (v: number, extent: number) => Math.max(0, Math.min(binCount - 1, Math.floor((v / extent + 1) * binCount / 2)));
+      const x0 = bin(Math.min(a[0], b[0]) - margin, 1), x1 = bin(Math.max(a[0], b[0]) + margin, 1);
+      const y0 = bin(Math.min(a[1], b[1]) - margin, extentY), y1 = bin(Math.max(a[1], b[1]) + margin, extentY);
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+        const i = ((variant * binCount + y) * binCount + x) * 4 + (k > loopSegments / 2 ? 2 : 0);
+        if (!data[i]) data[i] = k;
+        data[i + 1] = k;
+      }
+    }
+  }
+  const tex = new THREE.DataTexture(data, binCount, binCount * variants);
+  tex.needsUpdate = true;
+  return tex;
+}
+
 const FRAG = COMMON + LIGHTING + /* glsl */ `
 uniform float uR, uD, uHgt, uTw;
+uniform sampler2D uLoopBins;
 uniform sampler2D uOv; uniform float uOvOn;
 uniform vec3 uSelCol;
 
 // one knit loop, in stitch widths: starts and ends low behind the fabric (the sinker loops
 // joining the neighbours), comes forward as the two legs of the V, goes back over the head.
-vec3 loopP(float s, float lean, float bo, float zs) {
-  float a = 6.2831853 * s;
-  float h = uHgt * mix(1.0, 0.42, bo);
-  float x = s - 0.5 + 0.24 * sin(2.0 * a);
-  float y = -h * cos(a);
-  x += lean * 0.2 * (y / h + 1.0) * 0.5;
-  float z = -uD * cos(2.0 * a) * zs * mix(1.0, 0.5, bo);
-  return vec3(x, (y + bo * 0.1) * uAsp, z);
-}
+const int SEGMENTS = ${loopSegments};
+const vec3 curve[SEGMENTS + 1] = vec3[](${loopSamples.map(p => `vec3(${p.map(v => v.toFixed(8)).join(', ')})`).join(', ')});
 
 struct Hit { float h; vec3 n; vec3 t; float s; float th; vec4 S; };
 
@@ -108,25 +143,35 @@ void probe(vec2 p, vec4 S, float zs, vec2 slope, inout Hit best) {
   float lean = (fl & 4) != 0 ? -1.0 : (fl & 8) != 0 ? 1.0 : 0.0;
   float bo = (fl & 16) != 0 ? 1.0 : 0.0;
   float z0 = (fl & 2) != 0 ? -zs : zs;
-  vec3 a = loopP(0.0, lean, bo, z0);
-  for (int k = 1; k <= 20; k++) {
-    vec3 b = loopP(float(k) / 20.0, lean, bo, z0);
-    vec3 strand = b - a;
-    vec2 start = a.xy - slope * a.z;
-    vec2 axis = strand.xy - slope * strand.z;
-    float t = clamp(dot(p - start, axis) / max(dot(axis, axis), 1e-6), 0.0, 1.0);
-    vec2 e = p - start - t * axis;
-    float radius2 = uR * uR - dot(e, e);
-    if (radius2 > 0.0) {
-      float hz = sqrt(radius2);
-      float h = a.z + strand.z * t + hz;
-      if (h > best.h) {
-        best.h = h; best.n = normalize(vec3(e, hz)); best.t = normalize(strand);
-        best.s = (float(k - 1) + t) / 20.0; best.S = S;
-        best.th = atan(dot(normalize(vec2(-strand.y, strand.x)), e), hz);
+  vec3 scale = vec3(1.0, uHgt * mix(1.0, 0.42, bo) * uAsp, uD * z0 * mix(1.0, 0.5, bo));
+  float extentY = (uHgt + 0.1) * uAsp + uR + ${maxSlope} * uD;
+  ivec2 bin = clamp(ivec2((p / vec2(1.0, extentY) + 1.0) * ${binCount / 2}.0), ivec2(0), ivec2(${binCount - 1}));
+  bin.y += ${binCount} * (int(lean) + 1 + 3 * int(bo));
+  ivec4 ranges = ivec4(texelFetch(uLoopBins, bin, 0) * 255.0 + 0.5);
+  for (int halfLoop = 0; halfLoop < 2; halfLoop++) {
+    ivec2 span = halfLoop == 0 ? ranges.xy : ranges.zw;
+    if (span.x == 0) continue;
+    vec3 first = curve[span.x - 1];
+    vec3 a = first * scale + vec3(lean * 0.1 * (first.y + 1.0), bo * 0.1 * uAsp, 0.0);
+    for (int k = span.x; k <= span.y; k++) {
+      vec3 samplePoint = curve[k];
+      vec3 b = samplePoint * scale + vec3(lean * 0.1 * (samplePoint.y + 1.0), bo * 0.1 * uAsp, 0.0);
+      vec3 strand = b - a;
+      vec2 start = a.xy - slope * a.z;
+      vec2 axis = strand.xy - slope * strand.z;
+      float t = clamp(dot(p - start, axis) / max(dot(axis, axis), 1e-6), 0.0, 1.0);
+      vec2 e = p - start - t * axis;
+      float radius2 = uR * uR - dot(e, e);
+      if (radius2 > 0.0) {
+        float hz = sqrt(radius2);
+        float h = a.z + strand.z * t + hz;
+        if (h > best.h) {
+          best.h = h; best.n = vec3(e, hz); best.t = strand;
+          best.s = (float(k - 1) + t) / float(SEGMENTS); best.S = S;
+        }
       }
+      a = b;
     }
-    a = b;
   }
 }
 
@@ -167,7 +212,7 @@ void main() {
   vec3 V = normalize(cameraPosition - vWorld);
 
   vec2 slope = vec2(dot(V, Tu), dot(V, Tv)) / max(dot(V, Ng), 0.45);
-  slope *= 0.85 / max(1.0, length(slope));
+  slope *= ${maxSlope} / max(1.0, length(slope));
   vec3 col;
   float detail = 1.0 - smoothstep(0.22, 0.5, foot);
   Hit best; best.h = -1e9;
@@ -186,6 +231,7 @@ void main() {
   }
   vec3 near;
   if (best.h > -1e8) {
+    best.th = atan(dot(normalize(vec2(-best.t.y, best.t.x)), best.n.xy), best.n.z);
     vec3 base = unpackCol(best.S.r);
     if (abs(best.S.a - uSelOrd) < 0.5) base = mix(base, uSelCol, 0.55);
     vec3 n = normalize(Tu * best.n.x + Tv * best.n.y + Ng * best.n.z);
@@ -212,20 +258,23 @@ void main() {
     if (!shown(Sc)) discard;
   }
   // far away, the average look of the stitch under the pixel
-  vec3 baseF = unpackCol(Sc.r);
-  if (abs(Sc.a - uSelOrd) < 0.5) baseF = mix(baseF, uSelCol, 0.55);
-  float purl = ((int(Sc.g) & 2) != 0) == gl_FrontFacing ? 1.0 : 0.0;
-  // the stitch texture, filtered: columns of Vs (knit) or ridges (purl) that fade out once they're under a pixel
-  float tex = 1.0 - smoothstep(0.35, 0.9, foot);
-  float ridge = purl > 0.5 ? cos(6.2831853 * rf * 2.0) : cos(6.2831853 * (xc + 0.5)) * 0.7 + cos(6.2831853 * rf) * 0.3;
-  baseF *= 1.0 + 0.1 * ridge * tex;
-  vec3 tfF = normalize(Tv);
-  vec3 far = (shade(L0, C0, Ng, V, tfF, baseF) * 0.9 + shade(L1, C1, Ng, V, tfF, baseF) + shade(L2, C2, Ng, V, tfF, baseF)
-            + baseF * mix(GROUND, SKY, Ng.y * 0.5 + 0.5)) * mix(0.86, 0.72, purl);
-  // soft sheen at grazing angles, as yarn fuzz catches the light
-  far += baseF * pow(1.0 - max(dot(Ng, V), 0.0), 3.0) * 0.22;
-  if (!shown(Sc) && detail <= 0.0) discard;
-  col = mix(far, near, detail);
+  col = near;
+  if (detail < 1.0) {
+    vec3 baseF = unpackCol(Sc.r);
+    if (abs(Sc.a - uSelOrd) < 0.5) baseF = mix(baseF, uSelCol, 0.55);
+    float purl = ((int(Sc.g) & 2) != 0) == gl_FrontFacing ? 1.0 : 0.0;
+    // the stitch texture, filtered: columns of Vs (knit) or ridges (purl) that fade out once they're under a pixel
+    float tex = 1.0 - smoothstep(0.35, 0.9, foot);
+    float ridge = purl > 0.5 ? cos(6.2831853 * rf * 2.0) : cos(6.2831853 * (xc + 0.5)) * 0.7 + cos(6.2831853 * rf) * 0.3;
+    baseF *= 1.0 + 0.1 * ridge * tex;
+    vec3 tfF = normalize(Tv);
+    vec3 far = (shade(L0, C0, Ng, V, tfF, baseF) * 0.9 + shade(L1, C1, Ng, V, tfF, baseF) + shade(L2, C2, Ng, V, tfF, baseF)
+              + baseF * mix(GROUND, SKY, Ng.y * 0.5 + 0.5)) * mix(0.86, 0.72, purl);
+    // soft sheen at grazing angles, as yarn fuzz catches the light
+    far += baseF * pow(1.0 - max(dot(Ng, V), 0.0), 3.0) * 0.22;
+    if (!shown(Sc) && detail <= 0.0) discard;
+    col = mix(far, near, detail);
+  }
   if (uOvOn > 0.5 && gl_FrontFacing) { vec4 ov = texture2D(uOv, vUv); col = mix(col, srgb2lin(ov.rgb), ov.a); }
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>
@@ -272,13 +321,13 @@ export function fabricMaterials(P: Piece, mesh: MeshLike, sg: number, rg: number
     uAsp: { value: sg / rg }, uProg: { value: 1e9 }, uSelOrd: { value: -1 },
   };
   const cloth = new THREE.ShaderMaterial({
-    uniforms: { ...shared, uLift: { value: 0 }, uR: { value: 0.18 }, uD: { value: 0.2 }, uHgt: { value: 0.74 }, uTw: { value: 9 },
+    uniforms: { ...shared, uLift: { value: 0 }, uLoopBins: { value: loopBins(sg / rg) }, uR: { value: yarnRadius }, uD: { value: loopDepth }, uHgt: { value: loopHeight }, uTw: { value: 9 },
       uOv: { value: overlay }, uOvOn: { value: 0 }, uSelCol: { value: new THREE.Color(0x8a6fd1).convertSRGBToLinear() } },
     vertexShader: VERT, fragmentShader: FRAG, side: THREE.DoubleSide,
   });
   const fuzzLen = 0.32 / sg; // ~1.8 yarn radii
   const shells = Array.from({ length: FUZZ_SHELLS }, (_, i) => {
-    const k = (i + 1) / FUZZ_SHELLS;
+    const k = (i + 0.5) / FUZZ_SHELLS;
     return new THREE.ShaderMaterial({
       uniforms: { ...shared, uLift: { value: k * fuzzLen }, uShell: { value: k }, uFz: { value: 22 } },
       forceSinglePass: true, vertexShader: VERT, fragmentShader: FUZZ_FRAG, side: THREE.DoubleSide, transparent: true, depthWrite: false,

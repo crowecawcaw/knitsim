@@ -114,7 +114,7 @@ export class KnitScene {
     // the canvas is transparent: the studio backdrop behind it is a CSS gradient (#view3d), so it stays put
     // while the camera orbits, the way a paper sweep behind a product shot does
     const R = (this.R = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true }));
-    R.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    R.setPixelRatio(this.fullPixelRatio);
     R.setClearColor(0x000000, 0);
     // filmic response: bright highlights roll off instead of clipping, shadows keep some colour
     R.toneMapping = THREE.ACESFilmicToneMapping;
@@ -239,6 +239,7 @@ export class KnitScene {
     for (const p of this.parts) {
       p.gi?.dispose();
       p.tex.dispose();
+      p.fab.cloth.uniforms.uLoopBins.value.dispose();
       p.fab.uniforms.uSt.value.dispose();
       p.fab.uniforms.uRows.value.dispose();
     }
@@ -476,6 +477,9 @@ export class KnitScene {
   }
 
   private physicsRemainder = 0;
+  private readonly fullPixelRatio = Math.min(2, window.devicePixelRatio || 1);
+  private slowFrames = 0;
+  private idleSince = 0;
 
   private frame() {
     const host = this.host; const w = host.clientWidth, h = host.clientHeight; if (!w || !h) return;
@@ -494,8 +498,22 @@ export class KnitScene {
     const now = performance.now(); const dt = Math.min(0.1, (now - (this.lastT || now)) / 1000); this.lastT = now;
     const s = this.sim;
     const moving = s && !this.tween && (this.simRunning || (this.mode === 'assembled' && (s.grab || now < this.relaxUntil)));
-    if (!this.needsRender && !moving && !this.tween && !this.camTween && !this.dirtyTex.size &&
-        !Object.values(this.fades).some(f => f.v !== f.t)) return;
+    const active = this.needsRender || moving || this.tween || this.camTween || this.dirtyTex.size ||
+      Object.values(this.fades).some(f => f.v !== f.t);
+    if (active) {
+      // Count consecutive over-budget redraws. Ignore the interval after idle.
+      this.slowFrames = !this.idleSince && dt > 0.035 ? this.slowFrames + 1 : 0;
+      this.idleSince = 0;
+      if (this.slowFrames >= 3) {
+        const ratio = Math.max(this.fullPixelRatio * 0.4, R.getPixelRatio() * 0.75);
+        if (ratio < R.getPixelRatio()) R.setPixelRatio(ratio);
+        this.slowFrames = 0;
+      }
+    } else {
+      if (!this.idleSince) this.idleSince = now;
+      if (R.getPixelRatio() === this.fullPixelRatio || now - this.idleSince < 200) return;
+      R.setPixelRatio(this.fullPixelRatio);
+    }
     this.needsRender = false;
     // Bound catch-up work after a slow frame, while keeping solver steps fixed.
     this.physicsRemainder = moving ? Math.min(this.physicsRemainder + dt, 2 / 60) : 0;
