@@ -111,7 +111,7 @@ export function drawAnim(ctx: Ctx, t: number, s: Stitch, P: Piece): string {
       : t < 0.74 ? (act === 'k' ? 'Pull the new loop through toward you — it passes in front of the old loop.' : 'Push the new loop through to the back — the old loop’s top stays in front as a bump.')
       : (op === 'dec' ? 'Slide both old loops off: two stitches became one.' : op === 'inc' ? 'Two new loops from one: the row grows by a stitch.' : `Slide the old loop off. One ${verb} stitch done.`);
   }
-  ctx.fillStyle = '#1e2b3c'; ctx.font = '600 12px "DM Sans", system-ui, sans-serif';
+  ctx.fillStyle = '#1e2b3c'; ctx.font = '600 12px Courier, "Courier New", "Courier Prime", monospace';
   ctx.fillText(stitchName(s, P).toUpperCase(), 12, 20);
   return step;
 }
