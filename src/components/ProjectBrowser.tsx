@@ -115,7 +115,7 @@ export function ProjectBrowser({ api, onOpen }: Props) {
                 </button>
                 <div className="project-actions">
                   <button className="icon-btn small" title="Duplicate" aria-label={`Duplicate ${p.name}`} onClick={() => duplicate(p)}>
-                    <svg viewBox="0 0 24 24" width="16" height="16"><rect x="8" y="8" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.8" /><path d="M16 5.5V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+                    <svg viewBox="0 0 24 24" width="16" height="16"><rect x="8" y="8" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.8" /><path d="M16 5.5V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
                   </button>
                   <button className="icon-btn small" title="Delete" aria-label={`Delete ${p.name}`} onClick={() => remove(p)}>
                     <svg viewBox="0 0 24 24" width="16" height="16"><path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>

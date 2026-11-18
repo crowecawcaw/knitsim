@@ -36,7 +36,7 @@ function needleDraw(ctx: Ctx, x1: number, y1: number, x2: number, y2: number) {
 /** Draw frame t ∈ [0,1) of the animation for stitch s; returns the caption for this step. */
 export function drawAnim(ctx: Ctx, t: number, s: Stitch, P: Piece): string {
   ctx.clearRect(0, 0, ANIM_W, ANIM_H);
-  ctx.fillStyle = '#ede2cc'; ctx.fillRect(0, 0, ANIM_W, ANIM_H);
+  ctx.fillStyle = '#f4efe6'; ctx.fillRect(0, 0, ANIM_W, ANIM_H);
   const col = s.color; const row = P.rows[s.row];
   const act = row.dir === 'WS' ? (s.t === 'k' ? 'p' : 'k') : s.t; // action from the knitter's side
   const op = s.op;
