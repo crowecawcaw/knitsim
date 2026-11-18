@@ -768,6 +768,13 @@ function placePiece(P, mesh, at, built, neckRef) {
       const span = 300 * Math.PI / 180, Wd = (hi - lo + 1) / built.sg, R = Wd / span, rc = (lo + hi) / 2 / built.sg;
       const th = (x - rc) / R;
       w = [0, 1, 2].map(q => S[q] + d[q] * along + R * (nrm[q] * Math.cos(th) + a[q] * Math.sin(th)));
+    } else if (at === 'tube') {
+      const row = Math.max(0, Math.min(P.nrows - 1, Math.round(y * built.rg)));
+      const shape = mesh.rowShape || (mesh.rowShape = rowExtent(P));
+      const radius = shape[row].w / built.sg / (2 * Math.PI);
+      const u = mesh.us ? mesh.us[k] : (x * built.sg - shape[row].lo) / shape[row].w;
+      const angle = 2 * Math.PI * u;
+      w = [radius * Math.sin(angle), y, radius * Math.cos(angle)];
     } else if (at === 'torso') { // a tube around the body, hanging from the shoulders
       const circ = mesh.W / built.sg; const R = Math.max(circ / (2 * Math.PI), 6.5) + 0.5;
       const phi = -Math.PI / 2 + 2 * Math.PI * (mesh.us ? mesh.us[k] : (x - mesh.x0 / built.sg) / circ);
@@ -941,11 +948,13 @@ function samplePath(segs, t) {
 const SPOT_MAP = { front_left: 'front', front_right: 'front', shoulders: 'front', left_hand: 'left_arm', right_hand: 'right_arm',  waist: 'torso', left_leg: 'table', right_leg: 'table', crotch: 'table' };
 
 // ---------- Cloth simulation ----------
-function makeSim(doc) {
+function makeSim(doc, forPreview = false) {
   const built = doc.built; const parts = [];
   let N = 0;
   built.order.forEach(P => {
-    let at = SPOT_MAP[doc.placed[P.name]] || doc.placed[P.name]; if (!at || !P.nrows) return;
+    let at = SPOT_MAP[doc.placed[P.name]] || doc.placed[P.name];
+    if (!P.nrows || (!at && !forPreview)) return;
+    if (forPreview && (!at || (at === 'table' && P.round))) at = P.round ? 'tube' : 'table';
     const mesh = buildMesh(pv(built, P), P);
     if ((at === 'left_foot' || at === 'right_foot') && !mesh.graph) at = 'table';
     const pos0 = placePiece(P, mesh, at, pv(built, P));
@@ -958,7 +967,7 @@ function makeSim(doc) {
   const cons = [];
   parts.forEach(p => p.mesh.cons.forEach(([a, b, r, k, h]) => cons.push(a + p.offset, b + p.offset, r, k, h)));
   const C = new Float32Array(cons); const CS = 5;
-  const seamPairs = [], pairStage = []; const seen = new Set();
+  const seamPairs = [], pairStage = [], pairLine = []; const seen = new Set();
   doc.seams.forEach(s => {
     if (!s.A || !s.B) return;
     const pa = s.A.map(x => partOf[x.piece]), pb = s.B.map(x => partOf[x.piece]);
@@ -971,7 +980,7 @@ function makeSim(doc) {
       const va = nearestVert(A.mesh, sa.p) + A.offset, vb = nearestVert(B.mesh, sb.p) + B.offset;
       if (va === vb) continue;
       const key = va < vb ? va + ':' + vb : vb + ':' + va; if (seen.has(key)) continue; seen.add(key);
-      seamPairs.push(va, vb); pairStage.push(s.stage || 0);
+      seamPairs.push(va, vb); pairStage.push(s.stage || 0); pairLine.push(s.line ?? 0);
     }
   });
   const gathers = [];
@@ -1069,8 +1078,8 @@ function makeSim(doc) {
   function step(dt, opts = {}) {
     time += dt;
     const assembleT = opts.assembleT ?? time;
-    const grav = Math.min(1, Math.max(0, (assembleT - tGrav) / 1.4)) * 386 * 0.045; // inches/s² (softened)
-    const damp = assembleT < tGrav + 1 ? 0.9 : 0.97;
+    const grav = opts.firm ? 0 : Math.min(1, Math.max(0, (assembleT - tGrav) / 1.4)) * 386 * 0.045; // inches/s² (softened)
+    const damp = opts.firm ? 0.25 : assembleT < tGrav + 1 ? 0.9 : 0.97;
     const SK = new Float32Array(ST.length); let anyK = false;
     for (let c = 0; c < ST.length; c++) { SK[c] = stageOf(ST[c], assembleT); if (SK[c] > 0) anyK = true; }
     for (let i = 0; i < N; i++) {
@@ -1165,7 +1174,7 @@ function makeSim(doc) {
   function endGrab() { grab = null; }
   function reset() { time = 0; parts.forEach(p => pos.set(p.pos0, p.offset * 3)); prev.set(pos); }
   function seamGap() { let m = 0; for (let c = 0; c < S.length; c += 2) { const a = S[c] * 3, b = S[c + 1] * 3; m = Math.max(m, Math.hypot(pos[a] - pos[b], pos[a + 1] - pos[b + 1], pos[a + 2] - pos[b + 2])); } return m; }
-  return { parts, pos, step, reset, seamGap, restNear: (i, j) => fabricNear(i, j) || sameSeamStretch(i, j), feet, startGrab, endGrab, get grab() { return grab; }, seams: S, useTable, stageOf, tGrav, nStages, settleT: tGrav + 6, nSeam: S.length / 2, get time() { return time; }, N };
+  return { parts, pos, step, reset, seamGap, restNear: (i, j) => fabricNear(i, j) || sameSeamStretch(i, j), feet, startGrab, endGrab, get grab() { return grab; }, seams: S, seamLines: pairLine, useTable, stageOf, tGrav, nStages, settleT: tGrav + 6, nSeam: S.length / 2, get time() { return time; }, N };
 }
 
 function run(src, overrides) {

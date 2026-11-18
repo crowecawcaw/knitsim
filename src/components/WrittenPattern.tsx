@@ -21,14 +21,25 @@ interface Props {
   errors: number;
   /** the knitter's own settings (size, yarn), shown with the materials */
   settings: ReactNode;
+  version: ReactNode;
   selected: string | null;
   /** the step at the reading line, while scrolling */
   here: string | null;
   onSelect: (id: string) => void;
 }
 
+export function PatternHeading({ prose }: { prose: Prose }) {
+  return (
+      <header className="wp-head">
+        <h1>{prose.title || 'Untitled pattern'}</h1>
+        {prose.source && <p className="wp-src">Adapted from <a href={prose.source} target="_blank" rel="noopener">{prose.source.replace(/^https?:\/\/(www\.)?/, '').replace(/\/.*$/, '')}</a></p>}
+        {prose.intro.length > 0 && <p className="wp-intro">{prose.intro.join(' ')}</p>}
+      </header>
+  );
+}
+
 /** The pattern as a printed pattern reads, where each step can be tapped to see it and read it in plain words. */
-export function WrittenPattern({ prose, errors, settings, selected, here, onSelect }: Props) {
+export function WrittenPattern({ prose, errors, settings, version, selected, here, onSelect }: Props) {
   // `piece` is given for the top-level steps of a piece: those are the units scrolling knits through
   const step = (s: ProseStep, path: string, round: boolean, piece?: string) => {
     const id = path;
@@ -37,7 +48,7 @@ export function WrittenPattern({ prose, errors, settings, selected, here, onSele
     const unit = piece && pick ? { 'data-piece': piece, 'data-from': s.from ?? s.row, 'data-to': s.row } : {};
     const words = on ? spellOut(s.text, round) : null;
     return (
-      <li key={id} data-step={id} {...unit} className={'wp-step wp-' + s.kind + (on ? ' on' : '') + (pick ? ' pick' : '') + (here === id ? ' here' : '')}>
+      <li key={id} data-step={id} data-source-line={path.startsWith('f.') ? s.line : undefined} {...unit} className={'wp-step wp-' + s.kind + (on ? ' on' : '') + (pick ? ' pick' : '') + (here === id ? ' here' : '')}>
         {s.kind === 'note'
           ? <p className="wp-note">{s.text}</p>
           : (
@@ -63,21 +74,16 @@ export function WrittenPattern({ prose, errors, settings, selected, here, onSele
 
   return (
     <article className="wp">
-      <header className="wp-head">
-        <h1>{prose.title || 'Untitled pattern'}</h1>
-        {prose.source && <p className="wp-src">Adapted from <a href={prose.source} target="_blank" rel="noopener">{prose.source.replace(/^https?:\/\/(www\.)?/, '').replace(/\/.*$/, '')}</a></p>}
-        {prose.intro.length > 0 && <p className="wp-intro">{prose.intro.join(' ')}</p>}
-      </header>
+
 
       {errors > 0 && <p className="wp-warn">This pattern has {errors} error{errors > 1 ? 's' : ''} in its source, so parts of these instructions may be missing.</p>}
 
-      <section className="wp-yours">
-        <h2>Your version</h2>
-        {settings}
-      </section>
-
       <section>
         <h2>Materials</h2>
+        {settings && <details className="wp-yours">
+          <summary><strong>Your version</strong>{version}</summary>
+          {settings}
+        </details>}
         <dl className="wp-materials">
           {prose.materials.filter((m) => m.label !== 'Size').map((m) => (
             <div key={m.label}>
@@ -100,7 +106,7 @@ export function WrittenPattern({ prose, errors, settings, selected, here, onSele
       <p className="wp-hint">As you scroll, the preview knits along with the pattern. Tap a step to read it in plain words.</p>
 
       {prose.sections.map((sec, i) => (
-        <section key={sec.piece}>
+        <section key={sec.piece} data-pattern-piece={sec.piece}>
           <h2>{sec.title}</h2>
           <p className="wp-size">Finished piece: {sec.size}{sec.round ? ' · worked in the round' : ''}</p>
           {sec.like
@@ -109,7 +115,7 @@ export function WrittenPattern({ prose, errors, settings, selected, here, onSele
         </section>
       ))}
 
-      <section>
+      <section data-finishing>
         <h2>Finishing</h2>
         <ol className="wp-steps">{prose.finishing.map((s, j) => step(s, `f.${j}`, false))}</ol>
       </section>
