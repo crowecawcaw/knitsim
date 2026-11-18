@@ -304,8 +304,8 @@ export class KnitScene {
       this.drawTexture(part);
       // label on the mat
       const lc = document.createElement('canvas'); lc.width = 512; lc.height = 96; const lx = lc.getContext('2d')!;
-      lx.fillStyle = 'rgba(35,32,29,0.88)'; lx.font = '700 40px "IBM Plex Sans", sans-serif'; lx.fillText(part.P.name.replace(/_/g, ' '), 6, 46);
-      lx.font = '500 28px "IBM Plex Sans", sans-serif'; lx.fillStyle = 'rgba(35,32,29,0.5)';
+      lx.fillStyle = 'rgba(30,43,60,0.88)'; lx.font = '700 40px "DM Sans", sans-serif'; lx.fillText(part.P.name.replace(/_/g, ' '), 6, 46);
+      lx.font = '500 28px "DM Sans", sans-serif'; lx.fillStyle = 'rgba(30,43,60,0.5)';
       const fb0 = part.flatBox; const [wIn, hIn] = part.mesh.graph ? [fb0.x1 - fb0.x0, fb0.z1 - fb0.z0] : [part.P.widthIn, part.P.heightIn];
       lx.fillText(`${wIn.toFixed(1)}″ × ${hIn.toFixed(1)}″ · ${part.P.nrows - 1} rows`, 6, 86);
       const lt = new THREE.CanvasTexture(lc); lt.colorSpace = THREE.SRGBColorSpace;
