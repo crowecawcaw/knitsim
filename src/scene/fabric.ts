@@ -182,7 +182,7 @@ void main() {
   vec3 amb = mix(GROUND, SKY, Ng.y * 0.5 + 0.5) * 1.15 * fold;
 
   vec3 col;
-  float detail = 1.0 - smoothstep(0.2, 0.46, foot);
+  float detail = 1.0 - smoothstep(0.13, 0.34, foot);
   Hit best; best.h = -1e9;
   if (detail > 0.0) {
     for (int dr = 0; dr < 2; dr++) {
