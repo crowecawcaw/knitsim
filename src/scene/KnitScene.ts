@@ -5,11 +5,11 @@ import { BODY, TABLE, makeSim, type KnitDoc, type Piece, type Stitch } from '../
 import { drawOverlay, pieceXY, rowExtents } from '../draw/stitches';
 import type { ViewMode } from '../urlState';
 import { fabricMaterials, setFabricState, type FabricMats } from './fabric';
+import { KeyShadow, formGeometry, shadowCatcher, studioMaterial } from './studio';
+import { applySubdivision, buildSubdivision, type Subdivision } from './subdivide';
 
-// Match the look of the original (three r147, legacy lighting): hex colours are
-// used as-is and lights are scaled from the old intensity units.
+// Hex colours are used as-is; the shaders do their own lighting in linear light and convert on output.
 THREE.ColorManagement.enabled = false;
-const LEGACY_LIGHT = Math.PI;
 
 const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 const MAT_Y = -16;
@@ -30,9 +30,14 @@ interface Part {
   fab: FabricMats; shells: THREE.Mesh[]; label: THREE.Mesh;
   /** stitch-graph parts: render vertex → sim vertex, and the indexed sim mesh used for normals */
   map?: Int32Array; gi?: THREE.BufferGeometry;
+  /** the other parts are drawn as a smooth surface over the simulated mesh */
+  sub?: Subdivision;
 }
 
-/** Capsules drawn as soft see-through solids (the dress form, the foot forms). */
+/** The dress form is the same for every scene: built once, on first use. */
+let formGeo: THREE.BufferGeometry | null = null;
+
+/** Capsules drawn as matte solids (the foot forms). */
 function capsuleGroup(caps: any[], mat: THREE.Material) {
   const form = new THREE.Group();
   caps.filter((c) => !c.hidden).forEach((c) => {
@@ -47,6 +52,7 @@ function capsuleGroup(caps: any[], mat: THREE.Material) {
     if (L > 0.01) g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
     form.add(g);
   });
+  form.traverse((o) => o.layers.enable(KeyShadow.LAYER));
   return form;
 }
 
@@ -109,6 +115,9 @@ export class KnitScene {
   private raf = 0;
   private fuzzOn = false;
   private cleanup: (() => void)[] = [];
+  private shadow = new KeyShadow();
+  /** something on screen changed since the last frame was drawn */
+  private stale = true; private camSig = '';
 
   constructor(private host: HTMLElement, private statusEl: HTMLElement, private cb: SceneCallbacks, private firm = false) {
     // the canvas is transparent: the studio backdrop behind it is a CSS gradient (#view3d), so it stays put
@@ -120,36 +129,39 @@ export class KnitScene {
     R.toneMapping = THREE.ACESFilmicToneMapping;
     R.toneMappingExposure = 0.95;
     host.prepend(R.domElement);
-    const scene = this.scene;
-    scene.add(new THREE.HemisphereLight(0xfff6e8, 0x8a7a68, 0.7 * LEGACY_LIGHT));
-    const d1 = new THREE.DirectionalLight(0xfff3e2, 1.0 * LEGACY_LIGHT); d1.position.set(20, 60, 35); scene.add(d1);
-    const d2 = new THREE.DirectionalLight(0xdfe8ff, 0.25 * LEGACY_LIGHT); d2.position.set(-30, 10, -20); scene.add(d2);
-    const d3 = new THREE.DirectionalLight(0xe6eeff, 0.35 * LEGACY_LIGHT); d3.position.set(8, 14, -28); scene.add(d3);
-    // soft contact shadows on the floor, so the form and the table stand on something
+    const scene = this.scene; const shadow = this.shadow;
+    // a soft patch of shade right under things, on top of the shadow the key light casts
     const sc = document.createElement('canvas'); sc.width = sc.height = 128; const sx = sc.getContext('2d')!;
     const sg = sx.createRadialGradient(64, 64, 0, 64, 64, 64);
-    sg.addColorStop(0, 'rgba(60,45,30,0.42)'); sg.addColorStop(0.35, 'rgba(60,45,30,0.2)'); sg.addColorStop(1, 'rgba(60,45,30,0)');
+    sg.addColorStop(0, 'rgba(60,45,30,0.3)'); sg.addColorStop(0.35, 'rgba(60,45,30,0.14)'); sg.addColorStop(1, 'rgba(60,45,30,0)');
     sx.fillStyle = sg; sx.fillRect(0, 0, 128, 128);
     const stex = new THREE.CanvasTexture(sc); stex.colorSpace = THREE.SRGBColorSpace;
     const shadowMat = () => new THREE.MeshBasicMaterial({ map: stex, transparent: true, depthWrite: false, toneMapped: false });
     const floorShadow = (x: number, y: number, z: number, w: number, d: number, m: THREE.Material) => {
       const q = new THREE.Mesh(new THREE.PlaneGeometry(w, d), m); q.rotation.x = -Math.PI / 2; q.position.set(x, y, z); q.renderOrder = -1; return q;
     };
-    // dress form
-    const fm = new THREE.MeshStandardMaterial({ color: 0xcbc2b4, roughness: 0.85, transparent: true, opacity: 0.55, depthWrite: false });
+    const caster = <T extends THREE.Object3D>(o: T) => { o.layers.enable(KeyShadow.LAYER); return o; };
+    // dress form: one smooth matte solid on a wooden stand
+    const fm = studioMaterial(shadow, 0xd8d0c2, 0.92);
     this.formMat = fm;
-    const form = capsuleGroup(BODY.capsules, fm);
-    const standMat = new THREE.MeshStandardMaterial({ color: 0x8b6b4a, transparent: true });
-    const stand = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 14, 12), standMat); stand.position.set(0, -14, 0); form.add(stand);
+    const form = new THREE.Group();
+    const standMat = studioMaterial(shadow, 0x8b6b4a, 0.6);
     const formShadowMat = shadowMat();
-    form.add(floorShadow(0, -21, 0, 26, 18, formShadowMat));
+    const formCatch = shadowCatcher(shadow, 0, -21, 0, 70);
+    if (!firm) { // the pattern-following view never shows the form
+      form.add(caster(new THREE.Mesh((formGeo ??= formGeometry(BODY.capsules)), fm)));
+      const pole = caster(new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 14, 16), standMat)); pole.position.set(0, -14, 0); form.add(pole);
+      const foot = caster(new THREE.Mesh(new THREE.CylinderGeometry(4.2, 4.6, 0.7, 40), standMat)); foot.position.set(0, -20.65, 0); form.add(foot);
+      form.add(formCatch, floorShadow(0, -20.98, 0, 22, 16, formShadowMat));
+    }
     scene.add(form);
     const T = TABLE; const table = new THREE.Group();
-    const tm = new THREE.MeshStandardMaterial({ color: 0xb08a62, roughness: 0.7, transparent: true });
-    const top = new THREE.Mesh(new THREE.CylinderGeometry(T.r, T.r, T.depth, 48), tm); top.position.set(T.c[0], T.top - T.depth / 2, T.c[2]); table.add(top);
-    const leg = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 2.2, 26, 16), tm); leg.position.set(T.c[0], T.top - 14, T.c[2]); table.add(leg);
+    const tm = studioMaterial(shadow, 0xb08a62, 0.55, 0.08);
+    const top = caster(new THREE.Mesh(new THREE.CylinderGeometry(T.r, T.r, T.depth, 64), tm)); top.position.set(T.c[0], T.top - T.depth / 2, T.c[2]); table.add(top);
+    const leg = caster(new THREE.Mesh(new THREE.CylinderGeometry(1.2, 2.2, 26, 24), tm)); leg.position.set(T.c[0], T.top - 14, T.c[2]); table.add(leg);
     const tableShadowMat = shadowMat();
-    table.add(floorShadow(T.c[0], T.top - 27, T.c[2], T.r * 2.6, T.r * 2.2, tableShadowMat));
+    const tableCatch = shadowCatcher(shadow, T.c[0], T.top - 27, T.c[2], 60);
+    table.add(tableCatch, floorShadow(T.c[0], T.top - 26.98, T.c[2], T.r * 2.2, T.r * 2, tableShadowMat));
     scene.add(table);
     // cutting mat with a 1-inch grid
     const mc = document.createElement('canvas'); mc.width = mc.height = 512; const mx = mc.getContext('2d')!;
@@ -166,8 +178,8 @@ export class KnitScene {
     const grabDot = (this.grabDot = new THREE.Mesh(new THREE.SphereGeometry(0.45, 16, 12), new THREE.MeshBasicMaterial({ color: 0xc0573e })));
     grabDot.visible = false; scene.add(grabDot);
     this.fades = {
-      form: { v: 0, t: 0, mats: [fm, standMat, formShadowMat], base: [0.55, 1, 1] },
-      table: { v: 0, t: 0, mats: [tm, tableShadowMat], base: [1, 1] },
+      form: { v: 0, t: 0, mats: [fm, standMat, formShadowMat, formCatch.material as THREE.Material], base: [1, 1, 1, 1] },
+      table: { v: 0, t: 0, mats: [tm, tableShadowMat, tableCatch.material as THREE.Material], base: [1, 1, 1] },
       mat: { v: 1, t: 1, mats: [mat.material as THREE.Material], base: [1] },
       labels: { v: 1, t: 1, mats: [], base: [] },
     };
@@ -180,6 +192,7 @@ export class KnitScene {
     cancelAnimationFrame(this.raf);
     this.cleanup.forEach((f) => f());
     this.disposeGroup();
+    this.shadow.dispose();
     this.R.dispose();
     this.R.domElement.remove();
   }
@@ -204,6 +217,7 @@ export class KnitScene {
   setShowSeams(v: boolean, line?: number) {
     this.showSeams = v;
     this.seamLine = line;
+    this.stale = true;
     if (this.firm) this.traceFirmSeam();
   }
 
@@ -288,17 +302,35 @@ export class KnitScene {
     this.parts = sim.parts;
     this.posAligned = new Float32Array(sim.pos);
     this.posFlat = this.layoutFlat(sim);
+    const coarseTris = this.parts.reduce((a, p) => a + (p.mesh.graph ? 0 : p.mesh.tris.length / 3), 0);
     this.parts.forEach((part, idx) => {
       let g = new THREE.BufferGeometry();
       const n = part.mesh.local.length;
       const attr = new THREE.BufferAttribute(sim.pos.subarray(part.offset * 3, (part.offset + n) * 3), 3); attr.setUsage(THREE.DynamicDrawUsage);
       g.setAttribute('position', attr); g.setAttribute('uv', new THREE.Float32BufferAttribute(part.mesh.uv, 2)); g.setIndex(part.mesh.tris);
+      let curvK = 0;
       if (part.mesh.graph) { const gg = graphGeometry(part.mesh); part.gi = g; part.map = gg.map; g = gg.g; }
+      else {
+        // drawn as a smooth surface: two rounds of subdivision, one for the largest projects
+        const weld: number[] = [];
+        for (let k = 0; k < sim.welds.length; k += 2) { const a = sim.welds[k] - part.offset, b = sim.welds[k + 1] - part.offset; if (a >= 0 && a < n && b >= 0 && b < n) weld.push(a, b); }
+        const levels = coarseTris > 9000 ? 1 : 2;
+        const sub = buildSubdivision(n, part.mesh.tris, part.mesh.uv, part.mesh.local, weld, levels);
+        g.dispose(); g = new THREE.BufferGeometry();
+        const dyn = (a: Float32Array, k: number) => { const at = new THREE.BufferAttribute(a, k); at.setUsage(THREE.DynamicDrawUsage); return at; };
+        g.setAttribute('position', dyn(new Float32Array(sub.nRender * 3), 3)); g.setAttribute('normal', dyn(new Float32Array(sub.nRender * 3), 3));
+        g.setAttribute('aCurv', dyn(new Float32Array(sub.nRender), 1));
+        g.setAttribute('uv', new THREE.BufferAttribute(sub.uv, 2)); g.setIndex(new THREE.BufferAttribute(sub.index, 1));
+        part.sub = sub;
+        const gauge = part.P as unknown as { sg: number; rg: number };
+        const h = (part.mesh.cs / gauge.sg + part.mesh.cr / gauge.rg) / 2 / (1 << levels);
+        curvK = 4 / (h * h);
+      }
       // the overlay (needles, the picked stitch) is drawn in 2D; the fabric itself is a shader
       part.canvas = document.createElement('canvas');
       part.tex = new THREE.CanvasTexture(part.canvas); part.tex.anisotropy = 8;
-      const fm = fabricMaterials(part.P, part.mesh, doc.built.sg, doc.built.rg, part.tex);
-      const a = new THREE.Mesh(g, fm.cloth); a.userData.part = part;
+      const fm = fabricMaterials(part.P, part.mesh, doc.built.sg, doc.built.rg, part.tex, this.shadow, curvK);
+      const a = new THREE.Mesh(g, fm.cloth); a.userData.part = part; a.layers.enable(KeyShadow.LAYER);
       const shells = fm.shells.map((m) => { const sh = new THREE.Mesh(g, m); sh.raycast = () => {}; sh.renderOrder = 1; sh.visible = this.fuzzOn; return sh; });
       this.group!.add(a, ...shells); Object.assign(part, { g, attr, meshes: [a], idx, fab: fm, shells });
       this.drawTexture(part);
@@ -372,6 +404,7 @@ export class KnitScene {
     this.markDirty();
     this.traceFirmSeam();
     this.applyFades(true);
+    this.stale = true;
     this.camTween = null;
     Object.assign(this.cam, this.focusPreset() ?? this.camPreset(this.mode));
   }
@@ -508,9 +541,14 @@ export class KnitScene {
         const P = pa.array as Float32Array, N = na.array as Float32Array, m = p.map;
         for (let i = 0; i < m.length; i++) { const o = m[i] * 3, d = i * 3; P[d] = src[o]; P[d + 1] = src[o + 1]; P[d + 2] = src[o + 2]; N[d] = nrm[o]; N[d + 1] = nrm[o + 1]; N[d + 2] = nrm[o + 2]; }
         pa.needsUpdate = na.needsUpdate = true;
+      } else if (p.sub) {
+        const at = (k: string) => p.g.getAttribute(k) as THREE.BufferAttribute;
+        applySubdivision(p.sub, p.attr.array, at('position').array as Float32Array, at('normal').array as Float32Array, at('aCurv').array as Float32Array);
+        at('position').needsUpdate = at('normal').needsUpdate = at('aCurv').needsUpdate = true;
       } else p.g.computeVertexNormals();
       p.g.computeBoundingSphere();
     });
+    this.shadow.dirty = true; this.stale = true;
   }
 
   // ---------- textures ----------
@@ -527,6 +565,7 @@ export class KnitScene {
     const isCur = P.name === curPiece; const inProgress = isCur && progress < P.total;
     const sel = selected && selected.piece === P.name ? selected : null;
     setFabricState(part.fab, inProgress ? progress : null, sel ? sel.ord : null);
+    this.stale = true;
     const on = (inProgress || !!sel) && !mesh.graph; // graph meshes have no flat texture to paint on
     (part.fab.cloth.uniforms.uOvOn as THREE.IUniform).value = on ? 1 : 0;
     if (!on) return;
@@ -615,6 +654,7 @@ export class KnitScene {
     f.form.t = m === 'pieces' || this.firm ? 0 : 1; f.mat.t = m === 'pieces' ? 1 : 0; f.labels.t = f.mat.t;
     f.table.t = !this.firm && m !== 'pieces' && this.sim && this.sim.useTable ? 1 : 0;
     if (instant) Object.values(f).forEach((x) => { x.v = x.t; });
+    this.stale = true;
   }
   private updateStatus() {
     const s = this.sim; const el = this.statusEl; if (!s) return;
@@ -666,7 +706,8 @@ export class KnitScene {
       for (let k = 0; k < 2; k++) s.step(1 / 60, { assembleT: Math.max(this.simT, s.settleT) });
       this.markDirty(); this.updateGrabDot();
     } else if (s && this.simRunning) {
-      for (let k = 0; k < 3; k++) { this.simT += 1 / 60; s.step(1 / 60, { assembleT: this.simT }); }
+      // up to three steps a frame, fewer when a step is slow, so a big project stays responsive
+      for (let k = 0; k < 3 && (k === 0 || performance.now() - now < 13); k++) { this.simT += 1 / 60; s.step(1 / 60, { assembleT: this.simT }); }
       if (this.simT > s.settleT) { this.simRunning = false; this.posAssembled = new Float32Array(s.pos); }
       this.markDirty(); this.updateStatus(); this.updateGrabDot();
     }
@@ -684,7 +725,11 @@ export class KnitScene {
     // fades
     Object.values(this.fades).forEach((f) => {
       f.v += (f.t - f.v) * Math.min(1, dt * 5); if (Math.abs(f.t - f.v) < 0.002) f.v = f.t;
-      f.mats.forEach((m, i) => { m.opacity = f.v * f.base[i]; m.visible = f.v > 0.01; });
+      if (f.v !== f.t) { this.stale = true; this.shadow.dirty = true; }
+      f.mats.forEach((m, i) => {
+        m.opacity = f.v * f.base[i]; m.visible = f.v > 0.01;
+        const u = (m as THREE.ShaderMaterial).uniforms?.uOpacity; if (u) u.value = m.opacity;
+      });
     });
     // seam threads
     if (!this.firm && s && this.seamAttr && this.seamLines && this.seamMat) {
@@ -696,7 +741,27 @@ export class KnitScene {
     }
     if (this.dirtyTex.size && this.parts.length) { this.dirtyTex.forEach((n) => this.refreshTexture(n)); this.dirtyTex.clear(); }
     this.updateFuzz(h);
+    // nothing moved, nothing to draw: the last frame is still on the canvas
+    const c = this.cam;
+    const sig = [c.target.x, c.target.y, c.target.z, c.dist, c.phi, c.theta, c.fov, w, h].join();
+    const busy = !!this.tween || this.simRunning || !!this.camTween || !!(s && s.grab) || now < this.relaxUntil || resized;
+    if (!busy && !this.stale && sig === this.camSig) return;
+    this.camSig = sig; this.stale = false;
+    if (this.shadow.dirty) this.shadow.render(R, this.scene, this.casterBox());
     R.render(this.scene, this.camera);
+  }
+
+  /** Everything that casts a shadow right now. */
+  private casterBox() {
+    const box = new THREE.Box3(); const p = new THREE.Vector3();
+    for (const part of this.parts) {
+      if (!part.meshes[0].visible) continue;
+      const a = part.attr.array;
+      for (let i = 0; i < a.length; i += 3) box.expandByPoint(p.set(a[i], a[i + 1], a[i + 2]));
+    }
+    if (this.fades.form.v > 0.01 && !this.firm) box.union(new THREE.Box3(new THREE.Vector3(-25, -21, -6), new THREE.Vector3(25, 39.5, 6)));
+    if (this.fades.table.v > 0.01) box.union(new THREE.Box3(new THREE.Vector3(TABLE.c[0] - TABLE.r, TABLE.top - 27, TABLE.c[2] - TABLE.r), new THREE.Vector3(TABLE.c[0] + TABLE.r, TABLE.top, TABLE.c[2] + TABLE.r)));
+    return box;
   }
 
   /** Stray fibres only show when stitches are big enough on screen to see them. */
@@ -705,7 +770,7 @@ export class KnitScene {
     const pxPerIn = hPx / (2 * this.cam.dist * Math.tan((this.cam.fov * Math.PI) / 360));
     const on = pxPerIn / this.doc.built.sg > 5;
     if (on === this.fuzzOn) return;
-    this.fuzzOn = on; this.parts.forEach((p) => p.shells.forEach((m) => { m.visible = on && p.meshes[0].visible && !p.fab.cloth.transparent; }));
+    this.fuzzOn = on; this.stale = true; this.parts.forEach((p) => p.shells.forEach((m) => { m.visible = on && p.meshes[0].visible && !p.fab.cloth.transparent; }));
   }
 
   private updateGrabDot() {
@@ -761,7 +826,8 @@ export class KnitScene {
           const part = h.object.userData.part as Part; const f = h.face; const P = this.sim.pos;
           let best = f.a, bd = Infinity;
           const mp = part.map;
-          [f.a, f.b, f.c].map((v) => (mp ? mp[v] : v)).forEach((v) => {
+          const near = part.sub?.nearest;
+          [f.a, f.b, f.c].map((v) => (near ? near[v] : mp ? mp[v] : v)).forEach((v) => {
             const gi = (part.offset + v) * 3;
             const d = (P[gi] - h.point.x) ** 2 + (P[gi + 1] - h.point.y) ** 2 + (P[gi + 2] - h.point.z) ** 2;
             if (d < bd) { bd = d; best = v; }

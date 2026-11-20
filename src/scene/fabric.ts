@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import type { Piece } from '../knit';
 import { rowExtents } from '../draw/stitches';
+import { LIGHTING, SHADOW, type KeyShadow } from './studio';
 
 interface MeshLike { W: number; H: number; x0: number; y0: number; band?: boolean; graph?: boolean }
 
@@ -47,6 +48,7 @@ varying vec2 vUv;
 varying vec2 vCell;
 varying vec3 vWorld;
 varying vec3 vNrm;
+varying float vCurv;
 vec3 srgb2lin(vec3 c) { return pow(c, vec3(2.2)); }
 vec3 unpackCol(float p) { float r = floor(p / 65536.0); float g = floor((p - r * 65536.0) / 256.0); return srgb2lin(vec3(r, g, p - r * 65536.0 - g * 256.0) / 255.0); }
 float rowF() { return uY0 + vUv.y * uH; }
@@ -59,31 +61,29 @@ float h21(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx 
 `;
 
 const VERT = /* glsl */ `
-varying vec2 vUv; varying vec3 vWorld; varying vec3 vNrm; varying vec2 vCell;
+varying vec2 vUv; varying vec3 vWorld; varying vec3 vNrm; varying vec2 vCell; varying float vCurv;
 attribute vec2 aCell;
+attribute float aCurv;
 uniform float uLift;
 void main() {
-  vUv = uv; vCell = aCell;
+  vUv = uv; vCell = aCell; vCurv = aCurv;
   vec4 w = modelMatrix * vec4(position + normal * uLift, 1.0);
   vWorld = w.xyz; vNrm = normalize(mat3(modelMatrix) * normal);
   gl_Position = projectionMatrix * viewMatrix * w;
 }`;
 
-// Lights mirror the scene's, plus a cool back light so strands separate from the gaps.
-const LIGHTING = /* glsl */ `
-// a soft studio setup: a warm key high on the right, a dim cool fill from the left, a rim light from behind
-// that picks out the silhouette and the fuzz, and a little sky / floor bounce. Linear values; the renderer
-// tone-maps the result (ACES), so the key can be bright without clipping.
-const vec3 L0 = vec3(0.2857, 0.8571, 0.5);   // key, matches the scene's main light
-const vec3 L1 = vec3(-0.8018, 0.2673, -0.5345);
-const vec3 L2 = vec3(0.3, 0.45, -0.84);
-const vec3 C0 = vec3(1.0, 0.94, 0.85) * 1.55;
-const vec3 C1 = vec3(0.82, 0.88, 1.0) * 0.22;
-const vec3 C2 = vec3(0.85, 0.9, 1.0) * 0.55;
-const vec3 SKY = vec3(0.24, 0.25, 0.27), GROUND = vec3(0.07, 0.06, 0.05);
+// How much of the sky a point of the cloth sees, from how the surface folds around it: the bottom of
+// a fold is hemmed in by its own sides and goes dim, a ridge stays open. (The key light's shadows are
+// separate, from the shadow map.)
+const FOLDS = /* glsl */ `
+uniform float uCurvK;
+float foldLight(float zs) {
+  float k = vCurv * zs * uCurvK;   // 1 / radius of the fold, + in a valley seen from this side
+  return 1.0 - 0.5 * smoothstep(0.02, 1.1, k) + 0.06 * smoothstep(0.05, 1.0, -k);
+}
 `;
 
-const FRAG = COMMON + LIGHTING + /* glsl */ `
+const FRAG = COMMON + LIGHTING + SHADOW + FOLDS + /* glsl */ `
 uniform float uR, uD, uHgt, uTw;
 uniform sampler2D uOv; uniform float uOvOn, uContext;
 uniform vec3 uSelCol;
@@ -100,7 +100,7 @@ vec3 loopP(float s, float lean, float bo, float zs) {
   return vec3(x, (y + bo * 0.1) * uAsp, z);
 }
 
-struct Hit { float h; vec3 n; vec3 t; float s; float th; vec4 S; };
+struct Hit { float h; vec3 n; vec3 t; float s; float th; vec4 S; float d; };
 
 // strands of one stitch over point p: the closest point on each half of the loop
 void probe(vec2 p, vec4 S, float zs, inout Hit best) {
@@ -131,7 +131,7 @@ void probe(vec2 p, vec4 S, float zs, inout Hit best) {
     float h = C.z + hz;
     if (h > best.h) {
       vec3 Ta = loopP(bs + 0.004, lean, bo, z0) - loopP(bs - 0.004, lean, bo, z0);
-      best.h = h; best.n = normalize(vec3(e, hz)); best.t = normalize(Ta); best.s = bs; best.S = S;
+      best.h = h; best.n = normalize(vec3(e, hz)); best.t = normalize(Ta); best.s = bs; best.S = S; best.d = d;
       vec2 tn = normalize(Ta.xy); float side = tn.x * e.y - tn.y * e.x;
       best.th = atan(side, hz);
     }
@@ -140,13 +140,16 @@ void probe(vec2 p, vec4 S, float zs, inout Hit best) {
 
 vec3 shade(vec3 L, vec3 C, vec3 n, vec3 V, vec3 tf, vec3 base) {
   float NdL = dot(n, L);
-  float diff = max(0.0, (NdL + 0.2) / 1.2);
-  diff *= diff * (3.0 - 2.0 * diff) * 0.6 + diff * 0.4; // a touch of contrast in the falloff
+  // yarn is a bundle of fibres: light gets in and comes back out a little way round the strand
+  float diff = max(0.0, (NdL + 0.3) / 1.3);
+  diff *= diff * (3.0 - 2.0 * diff) * 0.5 + diff * 0.5;
   vec3 H = normalize(L + V);
   float t1 = dot(normalize(tf + n * 0.12), H), t2 = dot(normalize(tf - n * 0.25), H);
   float s1 = pow(sqrt(max(0.0, 1.0 - t1 * t1)), 60.0), s2 = pow(sqrt(max(0.0, 1.0 - t2 * t2)), 14.0);
-  vec3 spec = (vec3(s1) * 0.12 + base * s2 * 0.35) * smoothstep(-0.15, 0.35, NdL);
-  return C * (base * diff + spec);
+  vec3 spec = (vec3(s1) * 0.09 + base * s2 * 0.3) * smoothstep(-0.15, 0.35, NdL);
+  // light that has passed through fibre comes out richer in the yarn's own colour
+  vec3 deep = mix(base, base * base * 1.6, 0.35 * (1.0 - diff));
+  return C * (deep * diff + spec);
 }
 
 void main() {
@@ -173,9 +176,13 @@ void main() {
   Tu = normalize(Tu - Ng * dot(Ng, Tu)); Tv = normalize(Tv - Ng * dot(Ng, Tv));
   float foot = max(length(vec2(dsx.x, dsy.x)), length(vec2(dsx.y, dsy.y)) * uAsp);
   vec3 V = normalize(cameraPosition - vWorld);
+  // the key light's shadow and the dimness inside folds are the same for every strand under the pixel
+  float sh = keyShadow(vWorld, Ng);
+  float fold = foldLight(zs);
+  vec3 amb = mix(GROUND, SKY, Ng.y * 0.5 + 0.5) * 1.15 * fold;
 
   vec3 col;
-  float detail = 1.0 - smoothstep(0.22, 0.5, foot);
+  float detail = 1.0 - smoothstep(0.2, 0.46, foot);
   Hit best; best.h = -1e9;
   if (detail > 0.0) {
     for (int dr = 0; dr < 2; dr++) {
@@ -190,6 +197,9 @@ void main() {
       }
     }
   }
+  // between strands: the dim inside of the fabric, yarn seen in its own shade
+  vec3 baseC = unpackCol(Sc.r);
+  vec3 gap = baseC * baseC * 1.3 * (C0 * (0.1 + 0.16 * max(dot(Ng, L0), 0.0) * sh) + amb * 0.6);
   vec3 near;
   if (best.h > -1e8) {
     vec3 base = unpackCol(best.S.r);
@@ -204,21 +214,23 @@ void main() {
     n = normalize(n + side * (0.5 - f) * 0.8 * detail);
     vec3 tf = normalize(ty * 0.8 + side * 0.6);
     float fib = h21(vec2(floor(ph * 7.0 + best.th * 3.0), floor(best.s * 140.0)));
-    base *= mix(1.0, (0.86 + 0.24 * fib), detail);
+    base *= mix(1.0, (0.88 + 0.2 * fib), detail);
     // strands lower in the fabric sit in the shadow of the ones above
     float depth = smoothstep(-(uD + uR), uD + uR * 0.9, best.h);
-    float ao = mix(0.32, 1.0, depth) * mix(0.55, 1.0, ply);
-    near = (shade(L0, C0, n, V, tf, base) + shade(L1, C1, n, V, tf, base) + shade(L2, C2, n, V, tf, base)
-         + base * mix(GROUND, SKY, n.y * 0.5 + 0.5)) * ao;
-    near += base * pow(1.0 - max(dot(n, V), 0.0), 3.0) * 0.18 * ao;
+    float ao = mix(0.42, 1.0, depth) * mix(0.62, 1.0, ply);
+    near = (shade(L0, C0, n, V, tf, base) * sh + shade(L1, C1, n, V, tf, base) + shade(L2, C2, n, V, tf, base)
+         + base * mix(GROUND, SKY, n.y * 0.5 + 0.5) * 1.15 * fold) * ao;
+    // loose fibres standing off the strand catch light at grazing angles
+    near += base * (0.6 + 0.4 * sh) * pow(1.0 - max(dot(n, V), 0.0), 3.0) * 0.2 * ao;
+    // a strand's edge covers only part of its pixel: let the fabric behind show through there
+    float cover = clamp((uR - best.d) / max(foot * 0.75, 1e-4), 0.0, 1.0);
+    near = mix(gap, near, cover);
   } else {
-    // a gap between strands: the dim inside of the fabric
-    vec3 base = unpackCol(Sc.r);
-    near = base * (0.22 + 0.3 * max(dot(Ng, L0), 0.0)) * C0 * 0.6;
+    near = gap;
     if (!shown(Sc)) discard;
   }
   // far away, the average look of the stitch under the pixel
-  vec3 baseF = unpackCol(Sc.r);
+  vec3 baseF = baseC;
   if (abs(Sc.a - uSelOrd) < 0.5) baseF = mix(baseF, uSelCol, 0.55);
   float purl = ((int(Sc.g) & 2) != 0) == gl_FrontFacing ? 1.0 : 0.0;
   // Filter columns and rows separately so their different spacing holds up at a distance.
@@ -227,10 +239,10 @@ void main() {
   float columnRidge = cos(6.2831853 * (xc + 0.5)) * (1.0 - smoothstep(0.22, 0.5, fwidth(xc)));
   baseF *= 1.0 + 0.1 * mix(0.7 * columnRidge + 0.3 * rowRidge, rowRidge, purl);
   vec3 tfF = normalize(Tv);
-  vec3 far = (shade(L0, C0, Ng, V, tfF, baseF) * 0.9 + shade(L1, C1, Ng, V, tfF, baseF) + shade(L2, C2, Ng, V, tfF, baseF)
-            + baseF * mix(GROUND, SKY, Ng.y * 0.5 + 0.5)) * mix(0.86, 0.72, purl);
+  vec3 far = (shade(L0, C0, Ng, V, tfF, baseF) * 0.9 * sh + shade(L1, C1, Ng, V, tfF, baseF) + shade(L2, C2, Ng, V, tfF, baseF)
+            + baseF * amb) * mix(0.84, 0.74, purl);
   // soft sheen at grazing angles, as yarn fuzz catches the light
-  far += baseF * pow(1.0 - max(dot(Ng, V), 0.0), 3.0) * 0.22;
+  far += baseF * (0.6 + 0.4 * sh) * pow(1.0 - max(dot(Ng, V), 0.0), 3.0) * 0.22 * fold;
   if (!shown(Sc) && detail <= 0.0) discard;
   col = mix(far, near, detail);
   if (uOvOn > 0.5 && gl_FrontFacing) { vec4 ov = texture2D(uOv, vUv); col = mix(col, srgb2lin(ov.rgb), ov.a); }
@@ -239,7 +251,7 @@ void main() {
   #include <colorspace_fragment>
 }`;
 
-const FUZZ_FRAG = COMMON + LIGHTING + /* glsl */ `
+const FUZZ_FRAG = COMMON + LIGHTING + SHADOW + /* glsl */ `
 uniform float uShell, uFz;
 void main() {
   float rf = rowF();
@@ -261,7 +273,8 @@ void main() {
   vec3 Ng = normalize(vNrm) * (gl_FrontFacing ? 1.0 : -1.0);
   vec3 V = normalize(cameraPosition - vWorld);
   float rim = 1.0 - abs(dot(Ng, V));
-  vec3 c = base * (C0 * (0.5 + 0.5 * max(dot(Ng, L0), 0.0)) * 0.6 + C2 * rim * 1.2 + SKY * 0.6);
+  float sh = keyShadow(vWorld, Ng);
+  vec3 c = base * (C0 * (0.5 + 0.5 * max(dot(Ng, L0), 0.0)) * 0.6 * (0.35 + 0.65 * sh) + C2 * rim * 1.2 + SKY * 0.6);
   gl_FragColor = vec4(c, (0.55 - 0.45 * k) * (0.45 + 0.55 * rim));
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -269,9 +282,10 @@ void main() {
 
 export interface FabricMats { cloth: THREE.ShaderMaterial; shells: THREE.ShaderMaterial[]; uniforms: Record<string, THREE.IUniform> }
 
-export function fabricMaterials(P: Piece, mesh: MeshLike, sg: number, rg: number, overlay: THREE.Texture): FabricMats & { data: ReturnType<typeof fabricData> } {
+export function fabricMaterials(P: Piece, mesh: MeshLike, sg: number, rg: number, overlay: THREE.Texture, shadow: KeyShadow, curvK = 0): FabricMats & { data: ReturnType<typeof fabricData> } {
   const data = fabricData(P);
   const shared: Record<string, THREE.IUniform> = {
+    ...shadow.uniforms,
     uSt: { value: data.st }, uRows: { value: data.rows }, uCols: { value: data.cols }, uNRows: { value: P.nrows },
     // graph meshes carry stitch coordinates (x in the row, row) straight in their uv
     uBand: { value: mesh.band ? 1 : 0 }, uGraph: { value: mesh.graph ? 1 : 0 },
@@ -279,7 +293,7 @@ export function fabricMaterials(P: Piece, mesh: MeshLike, sg: number, rg: number
     uAsp: { value: sg / rg }, uProg: { value: 1e9 }, uSelOrd: { value: -1 },
   };
   const cloth = new THREE.ShaderMaterial({
-    uniforms: { ...shared, uLift: { value: 0 }, uR: { value: 0.18 }, uD: { value: 0.2 }, uHgt: { value: 0.74 }, uTw: { value: 9 },
+    uniforms: { ...shared, uLift: { value: 0 }, uR: { value: 0.2 }, uD: { value: 0.2 }, uHgt: { value: 0.74 }, uTw: { value: 9 }, uCurvK: { value: curvK },
       uOv: { value: overlay }, uOvOn: { value: 0 }, uContext: { value: 0 }, uSelCol: { value: new THREE.Color(0x2f86b8).convertSRGBToLinear() } },
     vertexShader: VERT, fragmentShader: FRAG, side: THREE.DoubleSide,
   });
