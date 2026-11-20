@@ -671,6 +671,17 @@ function footCaps(side, k = 1) {
 }
 
 const stretchOf = fab => !fab ? 1.15 : /rib/.test(fab) ? 1.55 : /garter|moss|seed/.test(fab) ? 1.2 : 1.15;
+// ribbing draws in: off the needles it rests well under its knitted width, and stretches back out to it and beyond
+// (a few rows of rib edging are held out to width by the fabric next to them; a deep band pulls in fully)
+const ribIn = fab => { const m = fab && /^rib(\d+)x(\d+)/.exec(fab); if (!m) return 1; const k = +m[1], p = +m[2]; return 1 - 0.26 * Math.min(1, 2 * Math.min(k, p) / (k + p)); };
+function drawInOf(P, rg) {
+  if (P._drawIn) return P._drawIn;
+  const n = P.nrows, out = new Float32Array(n).fill(1);
+  for (let a = 0; a < n;) { let b = a; while (b + 1 < n && P.rows[b + 1].fabric === P.rows[a].fabric) b++;
+    const full = ribIn(P.rows[a].fabric), deep = Math.max(0, Math.min(1, ((b - a + 1) / rg - 1) / 1.5));
+    for (let r = a; r <= b; r++) out[r] = 1 + (full - 1) * deep; a = b + 1; }
+  return (P._drawIn = out);
+}
 function rowExtent(P) {
   return P.rows.map(r => { let lo = Infinity, hi = -Infinity; r.stitches.forEach(s => { lo = Math.min(lo, s.x); hi = Math.max(hi, s.x); }); return { lo: lo - 0.5, w: hi - lo + 1 }; });
 }
@@ -686,7 +697,7 @@ function buildRoundMesh(built, P) {
     for (let i = 0; i <= nx; i++) { const u = i / nx; local.push({ x: (e.lo + u * e.w) / sg, y: ys / rg }); uv.push(u, (ys - y0) / (P.nrows - 0.5 - y0)); us.push(u); wid.push(e.w / sg); } }
   const V = (i, j) => j * (nx + 1) + i; const tris = [], cons = [];
   const fabAt = y => { const r = P.rows[Math.max(0, Math.min(P.nrows - 1, Math.round(y * rg)))]; return r.fabric; };
-  const addC = (a, b, k, horiz) => { const du = Math.abs(us[a] - us[b]) * (wid[a] + wid[b]) / 2, dy = Math.abs(local[a].y - local[b].y); cons.push([a, b, Math.hypot(du, dy), k, horiz ? stretchOf(fabAt(local[a].y)) : 0, k < 0.2 ? 1 : 0]); };
+  const addC = (a, b, k, horiz) => { const yr = Math.min(local[a].y, local[b].y), fab = fabAt(yr), inF = drawInOf(P, rg)[Math.max(0, Math.min(P.nrows - 1, Math.round(yr * rg)))]; const du = Math.abs(us[a] - us[b]) * (wid[a] + wid[b]) / 2 * inF, dy = Math.abs(local[a].y - local[b].y); cons.push([a, b, Math.hypot(du, dy), k, horiz ? stretchOf(fab) / inF : 0, k < 0.2 ? 1 : 0]); };
   for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { tris.push(V(i, j), V(i + 1, j), V(i + 1, j + 1), V(i, j), V(i + 1, j + 1), V(i, j + 1)); addC(V(i, j), V(i + 1, j + 1), 0.5, 0); addC(V(i + 1, j), V(i, j + 1), 0.5, 0); }
   for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) {
     if (i < nx) addC(V(i, j), V(i + 1, j), 1, 1);
@@ -753,7 +764,7 @@ function buildMesh(built, P) {
   }
   const tris = []; const cons = [];
   const V = (i, j) => vid[j * (nx + 1) + i];
-  const addC = (a, b, k, horiz) => { if (a < 0 || b < 0) return; const st = horiz ? stretchOf(P.rows[Math.max(0, Math.min(P.nrows - 1, Math.round(local[a].y * rg)))].fabric) : 0; cons.push([a, b, Math.hypot(local[a].x - local[b].x, local[a].y - local[b].y), k, st, k < 0.2 ? 1 : 0]); };
+  const addC = (a, b, k, horiz) => { if (a < 0 || b < 0) return; const ri = Math.max(0, Math.min(P.nrows - 1, Math.round(Math.min(local[a].y, local[b].y) * rg))), fab = P.rows[ri].fabric, inF = drawInOf(P, rg)[ri]; cons.push([a, b, Math.hypot((local[a].x - local[b].x) * inF, local[a].y - local[b].y), k, horiz ? stretchOf(fab) / inF : 0, k < 0.2 ? 1 : 0]); };
   for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
     if (!cell[j * nx + i]) continue;
     const a = V(i, j), b = V(i + 1, j), c = V(i + 1, j + 1), d = V(i, j + 1);
@@ -1242,7 +1253,7 @@ function makeSim(doc, forPreview = false) {
   // bounding boxes (with the cloth thickness) to skip far capsules quickly
   const capBox = caps.map(c => { const r = Math.max(c.ra, c.rb) + 0.5; return [0, 1, 2].map(q => [Math.min(c.a[q], c.b[q]) - r, Math.max(c.a[q], c.b[q]) + r]); });
   let time = 0;
-  const BEND = 1, GATHER_R = 0.3;
+  const BEND = 1, GATHER_R = 0.3, RIB_PULL = 0.12;
   function step(dt, opts = {}) {
     time += dt;
     const assembleT = opts.assembleT ?? time;
@@ -1270,7 +1281,9 @@ function makeSim(doc, forPreview = false) {
         const rMax = C[c + 4] ? r * C[c + 4] : r;
         // (the skip-one links are what resists bending: they push back in full when a fold shortens them)
         let diff;
-        if (d > rMax) diff = (d - rMax) / d; else if (d < r) diff = (C[c + 5] ? BEND : 0.3) * (d - r) / d; else continue;
+        if (d > rMax) diff = (d - rMax) / d; else if (d < r) diff = (C[c + 5] ? BEND : 0.3) * (d - r) / d;
+        else if (C[c + 4] > 1.7) diff = RIB_PULL * (d - r) / d; // ribbing springs back toward its drawn-in width
+        else continue;
         const f = 0.5 * k * diff;
         pos[a] += dx * f; pos[a + 1] += dy * f; pos[a + 2] += dz * f;
         pos[b] -= dx * f; pos[b + 1] -= dy * f; pos[b + 2] -= dz * f;
