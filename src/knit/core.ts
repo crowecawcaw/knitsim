@@ -671,6 +671,17 @@ function footCaps(side, k = 1) {
 }
 
 const stretchOf = fab => !fab ? 1.15 : /rib/.test(fab) ? 1.55 : /garter|moss|seed/.test(fab) ? 1.2 : 1.15;
+// ribbing draws in: off the needles it rests well under its knitted width, and stretches back out to it and beyond
+// (a few rows of rib edging are held out to width by the fabric next to them; a deep band pulls in fully)
+const ribIn = fab => { const m = fab && /^rib(\d+)x(\d+)/.exec(fab); if (!m) return 1; const k = +m[1], p = +m[2]; return 1 - 0.26 * Math.min(1, 2 * Math.min(k, p) / (k + p)); };
+function drawInOf(P, rg) {
+  if (P._drawIn) return P._drawIn;
+  const n = P.nrows, out = new Float32Array(n).fill(1);
+  for (let a = 0; a < n;) { let b = a; while (b + 1 < n && P.rows[b + 1].fabric === P.rows[a].fabric) b++;
+    const full = ribIn(P.rows[a].fabric), deep = Math.max(0, Math.min(1, ((b - a + 1) / rg - 1) / 1.5));
+    for (let r = a; r <= b; r++) out[r] = 1 + (full - 1) * deep; a = b + 1; }
+  return (P._drawIn = out);
+}
 function rowExtent(P) {
   return P.rows.map(r => { let lo = Infinity, hi = -Infinity; r.stitches.forEach(s => { lo = Math.min(lo, s.x); hi = Math.max(hi, s.x); }); return { lo: lo - 0.5, w: hi - lo + 1 }; });
 }
@@ -686,7 +697,7 @@ function buildRoundMesh(built, P) {
     for (let i = 0; i <= nx; i++) { const u = i / nx; local.push({ x: (e.lo + u * e.w) / sg, y: ys / rg }); uv.push(u, (ys - y0) / (P.nrows - 0.5 - y0)); us.push(u); wid.push(e.w / sg); } }
   const V = (i, j) => j * (nx + 1) + i; const tris = [], cons = [];
   const fabAt = y => { const r = P.rows[Math.max(0, Math.min(P.nrows - 1, Math.round(y * rg)))]; return r.fabric; };
-  const addC = (a, b, k, horiz) => { const du = Math.abs(us[a] - us[b]) * (wid[a] + wid[b]) / 2, dy = Math.abs(local[a].y - local[b].y); cons.push([a, b, Math.hypot(du, dy), k, horiz ? stretchOf(fabAt(local[a].y)) : 0]); };
+  const addC = (a, b, k, horiz) => { const yr = Math.min(local[a].y, local[b].y), fab = fabAt(yr), inF = drawInOf(P, rg)[Math.max(0, Math.min(P.nrows - 1, Math.round(yr * rg)))]; const du = Math.abs(us[a] - us[b]) * (wid[a] + wid[b]) / 2 * inF, dy = Math.abs(local[a].y - local[b].y); cons.push([a, b, Math.hypot(du, dy), k, horiz ? stretchOf(fab) / inF : 0, k < 0.2 ? 1 : 0]); };
   for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { tris.push(V(i, j), V(i + 1, j), V(i + 1, j + 1), V(i, j), V(i + 1, j + 1), V(i, j + 1)); addC(V(i, j), V(i + 1, j + 1), 0.5, 0); addC(V(i + 1, j), V(i, j + 1), 0.5, 0); }
   for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) {
     if (i < nx) addC(V(i, j), V(i + 1, j), 1, 1);
@@ -713,32 +724,59 @@ function buildMesh(built, P) {
     for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) if (covered(x0 + (i + (a + 0.5) / 3) * cs, y0 + (j + (b + 0.5) / 3) * cr)) c++;
     cell[j * nx + i] = c >= 5 ? 1 : 0;
   }
+  // The outline of the fabric, in stitch units: the sides of every run of stitches, and the stretches
+  // of each line between two rows that only one of them covers. The grid is blocky; its boundary
+  // vertices are moved onto this outline, so the mesh ends where the knitting does (necklines,
+  // shaped sides) and seams have the true edge to hold on to.
+  const runs = rowsX.map(xs => { const out = []; xs.forEach(x => { const l = out[out.length - 1]; if (l && x - l[1] <= 1.01) l[1] = x; else out.push([x, x]); }); return out.map(([a, b]) => [a - 0.5, b + 0.5]); });
+  const runsAt = r => (r >= 0 && r < P.nrows ? runs[r] : []);
+  const inRuns = (R, x) => R.some(([a, b]) => x > a && x < b);
+  const outline = []; // [x0, y0, x1, y1]
+  for (let r = -1; r < P.nrows; r++) {
+    for (const [a, b] of runsAt(r)) outline.push([a, r - 0.5, a, r + 0.5], [b, r - 0.5, b, r + 0.5]);
+    const A = runsAt(r), B = runsAt(r + 1);
+    const cuts = [...new Set([...A, ...B].flat())].sort((p, q) => p - q);
+    for (let i = 0; i + 1 < cuts.length; i++) { const m = (cuts[i] + cuts[i + 1]) / 2; if (inRuns(A, m) !== inRuns(B, m)) outline.push([cuts[i], r + 0.5, cuts[i + 1], r + 0.5]); }
+  }
+  const snap = (xs, ys) => {
+    let best = null, bd = 1; // at most one cell away
+    for (const [ax, ay, bx, by] of outline) {
+      if (Math.min(ay, by) > ys + cr || Math.max(ay, by) < ys - cr) continue;
+      const ex = bx - ax, ey = by - ay, L2 = ex * ex + ey * ey;
+      const t = L2 ? Math.max(0, Math.min(1, ((xs - ax) * ex + (ys - ay) * ey) / L2)) : 0;
+      const qx = ax + ex * t, qy = ay + ey * t, d = Math.hypot((qx - xs) / cs, (qy - ys) / cr);
+      if (d < bd) { bd = d; best = [qx, qy]; }
+    }
+    return best;
+  };
+  const cellOn = (ci, cj) => ci >= 0 && cj >= 0 && ci < nx && cj < ny && cell[cj * nx + ci];
   const vid = new Int32Array((nx + 1) * (ny + 1)).fill(-1);
   const local = [], uv = [];
   const W = nx * cs, H = ny * cr;
   for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) {
-    const used = [[i - 1, j - 1], [i, j - 1], [i - 1, j], [i, j]].some(([a, b]) => a >= 0 && b >= 0 && a < nx && b < ny && cell[b * nx + a]);
-    if (!used) continue;
+    const around = [[i - 1, j - 1], [i, j - 1], [i - 1, j], [i, j]].filter(([a, b]) => cellOn(a, b)).length;
+    if (!around) continue;
     vid[j * (nx + 1) + i] = local.length;
-    local.push({ x: (x0 + i * cs) / sg, y: (y0 + j * cr) / rg });
-    uv.push(i * cs / W, j * cr / H);
+    let xs = x0 + i * cs, ys = y0 + j * cr;
+    if (around < 4) { const q = snap(xs, ys); if (q) { xs = q[0]; ys = q[1]; } }
+    local.push({ x: xs / sg, y: ys / rg });
+    uv.push((xs - x0) / W, (ys - y0) / H);
   }
   const tris = []; const cons = [];
   const V = (i, j) => vid[j * (nx + 1) + i];
-  const addC = (a, b, k) => { if (a < 0 || b < 0) return; const horiz = Math.abs(local[a].y - local[b].y) < 1e-6 ? stretchOf(P.rows[Math.max(0, Math.min(P.nrows - 1, Math.round(local[a].y * rg)))].fabric) : 0; cons.push([a, b, Math.hypot(local[a].x - local[b].x, local[a].y - local[b].y), k, horiz]); };
+  const addC = (a, b, k, horiz) => { if (a < 0 || b < 0) return; const ri = Math.max(0, Math.min(P.nrows - 1, Math.round(Math.min(local[a].y, local[b].y) * rg))), fab = P.rows[ri].fabric, inF = drawInOf(P, rg)[ri]; cons.push([a, b, Math.hypot((local[a].x - local[b].x) * inF, local[a].y - local[b].y), k, horiz ? stretchOf(fab) / inF : 0, k < 0.2 ? 1 : 0]); };
   for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
     if (!cell[j * nx + i]) continue;
     const a = V(i, j), b = V(i + 1, j), c = V(i + 1, j + 1), d = V(i, j + 1);
     tris.push(a, b, c, a, c, d);
-    addC(a, c, 0.5); addC(b, d, 0.5);
+    addC(a, c, 0.5, 0); addC(b, d, 0.5, 0);
   }
   const seen = new Set();
   for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) {
     const a = V(i, j); if (a < 0) continue;
     const nb = (ii, jj, k) => { if (ii > nx || jj > ny) return; const b = V(ii, jj); if (b < 0) return; const key = a * 1e6 + b; if (seen.has(key)) return; // only along existing cells
-      seen.add(key); addC(a, b, k); };
+      seen.add(key); addC(a, b, k, jj === j); };
     // structural edges only if an adjacent cell exists
-    const cellOn = (ci, cj) => ci >= 0 && cj >= 0 && ci < nx && cj < ny && cell[cj * nx + ci];
     if (cellOn(i, j) || cellOn(i, j - 1)) nb(i + 1, j, 1);
     if (cellOn(i, j) || cellOn(i - 1, j)) nb(i, j + 1, 1);
     if (V(i + 2, j) >= 0 && (cellOn(i, j) || cellOn(i, j - 1)) && (cellOn(i + 1, j) || cellOn(i + 1, j - 1))) nb(i + 2, j, 0.15);
@@ -788,7 +826,7 @@ function placePiece(P, mesh, at, built, neckRef) {
       else { rad = Math.max(R, 3.4) + 0.4; y0 = topY - 1.5; }
       let yy = y;
       if (at === 'neck' && !P.pickup && Hin > 9) { // a tall cowl is worn folded in half
-        if (y > Hin / 2) { yy = Hin - y; rad += 0.8; }
+        if (y > Hin / 2) { yy = Hin - y; rad += 1.0; }
         rad += 0.25 * Math.sin(phi * 5 + y * 0.7); // tiny wobble so it can slump into folds
         const z = rad * Math.cos(phi) + 1.2; w = [rad * Math.sin(phi), y0 + yy - (z + 3) * 0.45, z];
       } else w = [rad * Math.sin(phi), y0 + yy, rad * Math.cos(phi)];
@@ -965,24 +1003,65 @@ function makeSim(doc, forPreview = false) {
   parts.forEach(p => { pos.set(p.pos0, p.offset * 3); });
   prev.set(pos);
   const cons = [];
-  parts.forEach(p => p.mesh.cons.forEach(([a, b, r, k, h]) => cons.push(a + p.offset, b + p.offset, r, k, h)));
-  const C = new Float32Array(cons); const CS = 5;
+  parts.forEach(p => p.mesh.cons.forEach(([a, b, r, k, h, bend]) => cons.push(a + p.offset, b + p.offset, r, k, h || 0, bend ? 1 : 0)));
+  const C = new Float32Array(cons); const CS = 6;
+  // ---- seams ----
+  // Each side of a seam is the chain of mesh vertices along that edge, with how far along the edge
+  // (0..1) each one sits. The two chains rarely have matching vertices (rows against stitches, a
+  // sleeve cap against an armhole), so every vertex is sewn to the point at the same distance along
+  // the other edge: between two of its vertices. Both edges then follow one line, with no gaps or
+  // puckers where the spacing differs.
   const seamPairs = [], pairStage = [], pairLine = []; const seen = new Set();
+  const sew = []; // a, b0, b1, w, index of its stage in sewStage
+  const welds = []; // vertex pairs that are one point of the cloth from the start (the join of a tube)
+  const sewStage = [];
+  const chainOf = (segs) => {
+    const L = edgeLen(segs), n = Math.max(8, Math.ceil(L / 0.12)); const vs = [], ts = [], cnt = [];
+    for (let i = 0; i <= n; i++) {
+      const sp = samplePath(segs, i / n); const pt = partOf[sp.piece];
+      const v = nearestVert(pt.mesh, sp.p) + pt.offset;
+      if (vs.length && vs[vs.length - 1] === v) { ts[ts.length - 1] += i / n; cnt[cnt.length - 1]++; }
+      else { vs.push(v); ts.push(i / n); cnt.push(1); }
+    }
+    for (let i = 0; i < ts.length; i++) ts[i] /= cnt[i];
+    if (ts.length > 1) { ts[0] = 0; ts[ts.length - 1] = 1; }
+    return { vs, ts };
+  };
+  const sewChain = (A, B, stageIdx, record) => {
+    for (let i = 0; i < A.vs.length; i++) {
+      const a = A.vs[i], t = A.ts[i]; let k = 0;
+      while (k + 2 < B.vs.length && B.ts[k + 1] < t) k++;
+      let b0 = B.vs[k], b1 = B.vs[Math.min(k + 1, B.vs.length - 1)], w = 0;
+      if (b1 !== b0) { const span = B.ts[k + 1] - B.ts[k]; w = span > 1e-9 ? Math.max(0, Math.min(1, (t - B.ts[k]) / span)) : 0; }
+      if (w < 0.04) { b1 = b0; w = 0; } else if (w > 0.96) { b0 = b1; w = 0; }
+      if (a === b0 || a === b1) continue;
+      const key = b0 === b1 ? (a < b0 ? a + ':' + b0 : b0 + ':' + a) : a + '>' + b0 + ':' + b1;
+      if (seen.has(key)) continue; seen.add(key);
+      sew.push(a, b0, b1, w, stageIdx);
+      if (record) { seamPairs.push(a, w > 0.5 ? b1 : b0); pairStage.push(sewStage[stageIdx]); }
+    }
+  };
   doc.seams.forEach(s => {
     if (!s.A || !s.B) return;
     const pa = s.A.map(x => partOf[x.piece]), pb = s.B.map(x => partOf[x.piece]);
     if (pa.some(x => !x) || pb.some(x => !x)) return;
     if (s.kind === 'round' && pa.every(x => x.mesh.graph)) return; // the stitch graph is already a closed tube
-    const L = Math.max(edgeLen(s.A), edgeLen(s.B)); const n = Math.max(4, Math.ceil(L / 0.7));
-    for (let i = 0; i <= n; i++) {
-      const sa = samplePath(s.A, i / n), sb = samplePath(s.B, i / n);
-      const A = partOf[sa.piece], B = partOf[sb.piece];
-      const va = nearestVert(A.mesh, sa.p) + A.offset, vb = nearestVert(B.mesh, sb.p) + B.offset;
-      if (va === vb) continue;
-      const key = va < vb ? va + ':' + vb : vb + ':' + va; if (seen.has(key)) continue; seen.add(key);
-      seamPairs.push(va, vb); pairStage.push(s.stage || 0); pairLine.push(s.line ?? 0);
+    const A = chainOf(s.A), B = chainOf(s.B);
+    const si = sewStage.length; sewStage.push(s.stage || 0);
+    const before = seamPairs.length, sewBefore = sew.length;
+    sewChain(A, B, si, true); sewChain(B, A, si, false);
+    // an edge that starts out closed (a tube placed as a tube) is held shut from the first step: left to
+    // close in its turn, it gapes while the piece first settles and other layers slip through the slit
+    let open = 0;
+    for (let c = sewBefore; c < sew.length; c += 5) { const a = sew[c] * 3, b0 = sew[c + 1] * 3, b1 = sew[c + 2] * 3, w = sew[c + 3];
+      open = Math.max(open, Math.hypot(pos[b0] * (1 - w) + pos[b1] * w - pos[a], pos[b0 + 1] * (1 - w) + pos[b1 + 1] * w - pos[a + 1], pos[b0 + 2] * (1 - w) + pos[b1 + 2] * w - pos[a + 2])); }
+    if (open < 0.05) {
+      sewStage[si] = -100; for (let k = before / 2; k < pairStage.length; k++) pairStage[k] = -100;
+      if (s.kind === 'round') for (let c = sewBefore; c < sew.length; c += 5) if (sew[c + 1] === sew[c + 2]) welds.push(sew[c], sew[c + 1]);
     }
+    for (let k = before; k < seamPairs.length; k += 2) pairLine.push(s.line ?? 0);
   });
+  const SW = new Float32Array(sew); const SWS = 5;
   const gathers = [];
   // gathered tops: pull every top-edge vertex toward their common centre
   parts.forEach(p => {
@@ -992,7 +1071,7 @@ function makeSim(doc, forPreview = false) {
     else { const pts = engineEdgeOf(built, `${p.P.name}.top`)[0].pts; vs = [...new Set(pts.map(q => nearestVert(p.mesh, q) + p.offset))]; }
     gathers.push(Int32Array.from(vs));
   });
-  const S = new Int32Array(seamPairs); const ST = new Float32Array(pairStage);
+  const S = new Int32Array(seamPairs); const ST = new Float32Array(sewStage);
   // ---- self-collision: cloth may not pass through cloth ----
   // particles closer than SELF_R repel, unless they are neighbours in the knitted fabric
   // (same piece, close in rest layout) or both sit by a seam / gather that pulls them together.
@@ -1046,7 +1125,7 @@ function makeSim(doc, forPreview = false) {
       const cx = Math.floor(pos[ix] * inv), cy = Math.floor(pos[ix + 1] * inv), cz = Math.floor(pos[ix + 2] * inv);
       for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) for (let oz = -1; oz <= 1; oz++) {
         for (let j = hHead[cellKey(cx + ox, cy + oy, cz + oz)]; j >= 0; j = hNext[j]) {
-          if (j <= i) continue;
+          if (j <= i || !(isGraph[i] || isGraph[j])) continue;
           const jx = j * 3;
           const dx = pos[jx] - pos[ix], dy = pos[jx + 1] - pos[ix + 1], dz = pos[jx + 2] - pos[ix + 2];
           const d2 = dx * dx + dy * dy + dz * dz; if (d2 >= R2 || d2 < 1e-12) continue;
@@ -1059,6 +1138,105 @@ function makeSim(doc, forPreview = false) {
           prev[ix] -= mx * 0.6; prev[ix + 1] -= my * 0.6; prev[ix + 2] -= mz * 0.6;
           prev[jx] += mx * 0.6; prev[jx + 1] += my * 0.6; prev[jx + 2] += mz * 0.6;
         }
+      }
+    }
+  }
+  // ---- cloth against cloth, as surfaces ----
+  // The particle test above leaves holes: a point can slip through the middle of a mesh cell, and
+  // two edges can cross without any two points coming close. So every point of the (coarse) cloth
+  // meshes is also kept a fabric's thickness away from every triangle that isn't its neighbour.
+  // Stitch-graph pieces, dense with particles, keep the particle test.
+  const THICK = 0.4, THICK2 = THICK * THICK;
+  const triV = []; const isGraph = new Uint8Array(N);
+  parts.forEach(p => {
+    if (p.mesh.graph) { isGraph.fill(1, p.offset, p.offset + p.mesh.local.length); return; }
+    const T = p.mesh.tris, L = p.mesh.local;
+    for (let i = 0; i < T.length; i += 3) {
+      const a = L[T[i]], b = L[T[i + 1]], c = L[T[i + 2]];
+      if (Math.abs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)) < 1e-4) continue; // a sliver left by snapping to the outline
+      triV.push(T[i] + p.offset, T[i + 1] + p.offset, T[i + 2] + p.offset);
+    }
+  });
+  const TV = new Int32Array(triV), nT = TV.length / 3;
+  const anyGraph = parts.some(p => p.mesh.graph);
+  const TCELL = 1.3, THS = 16381, tHead = new Int32Array(THS), tStamp = new Int32Array(nT).fill(-1);
+  let tNext = new Int32Array(nT * 6), tTri = new Int32Array(nT * 6);
+  const tSph = new Float32Array(nT * 4); // centre and (radius + thickness)² of each triangle, to skip most candidates
+  function clothCollide() {
+    if (!nT) return;
+    tHead.fill(-1); let ne = 0; const inv = 1 / TCELL;
+    for (let t = 0; t < nT; t++) {
+      const a = TV[t * 3] * 3, b = TV[t * 3 + 1] * 3, c = TV[t * 3 + 2] * 3;
+      const x0 = Math.floor((Math.min(pos[a], pos[b], pos[c]) - THICK) * inv), x1 = Math.floor((Math.max(pos[a], pos[b], pos[c]) + THICK) * inv);
+      const y0 = Math.floor((Math.min(pos[a + 1], pos[b + 1], pos[c + 1]) - THICK) * inv), y1 = Math.floor((Math.max(pos[a + 1], pos[b + 1], pos[c + 1]) + THICK) * inv);
+      const z0 = Math.floor((Math.min(pos[a + 2], pos[b + 2], pos[c + 2]) - THICK) * inv), z1 = Math.floor((Math.max(pos[a + 2], pos[b + 2], pos[c + 2]) + THICK) * inv);
+      if ((x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1) > 64) continue; // stretched far out of shape mid-assembly
+      { const cx = (pos[a] + pos[b] + pos[c]) / 3, cy = (pos[a + 1] + pos[b + 1] + pos[c + 1]) / 3, cz = (pos[a + 2] + pos[b + 2] + pos[c + 2]) / 3;
+        const r2 = Math.max((pos[a] - cx) ** 2 + (pos[a + 1] - cy) ** 2 + (pos[a + 2] - cz) ** 2, (pos[b] - cx) ** 2 + (pos[b + 1] - cy) ** 2 + (pos[b + 2] - cz) ** 2, (pos[c] - cx) ** 2 + (pos[c + 1] - cy) ** 2 + (pos[c + 2] - cz) ** 2);
+        tSph[t * 4] = cx; tSph[t * 4 + 1] = cy; tSph[t * 4 + 2] = cz; tSph[t * 4 + 3] = (Math.sqrt(r2) + THICK) ** 2; }
+      for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) {
+        if (ne >= tTri.length) { const g = new Int32Array(ne * 2); g.set(tTri); tTri = g; const h = new Int32Array(ne * 2); h.set(tNext); tNext = h; }
+        const k = ((((x * 73856093) ^ (y * 19349663) ^ (z * 83492791)) % THS) + THS) % THS;
+        tTri[ne] = t; tNext[ne] = tHead[k]; tHead[k] = ne++;
+      }
+    }
+    for (let i = 0; i < N; i++) {
+      if (isGraph[i]) continue;
+      const ix = i * 3; const px = pos[ix], py = pos[ix + 1], pz = pos[ix + 2];
+      const k = ((((Math.floor(px * inv) * 73856093) ^ (Math.floor(py * inv) * 19349663) ^ (Math.floor(pz * inv) * 83492791)) % THS) + THS) % THS;
+      for (let e = tHead[k]; e >= 0; e = tNext[e]) {
+        const t = tTri[e]; if (tStamp[t] === i) continue; tStamp[t] = i;
+        { const sx = px - tSph[t * 4], sy = py - tSph[t * 4 + 1], sz = pz - tSph[t * 4 + 2]; if (sx * sx + sy * sy + sz * sz >= tSph[t * 4 + 3]) continue; }
+        const ia = TV[t * 3], ib = TV[t * 3 + 1], ic = TV[t * 3 + 2];
+        if (ia === i || ib === i || ic === i) continue;
+        if (fabricNear(i, ia) || fabricNear(i, ib) || fabricNear(i, ic)) continue;
+        const a = ia * 3, b = ib * 3, c = ic * 3;
+        // closest point of the triangle to p (Ericson, Real-Time Collision Detection 5.1.5), as barycentrics
+        const abx = pos[b] - pos[a], aby = pos[b + 1] - pos[a + 1], abz = pos[b + 2] - pos[a + 2];
+        const acx = pos[c] - pos[a], acy = pos[c + 1] - pos[a + 1], acz = pos[c + 2] - pos[a + 2];
+        const apx = px - pos[a], apy = py - pos[a + 1], apz = pz - pos[a + 2];
+        const d1 = abx * apx + aby * apy + abz * apz, d2 = acx * apx + acy * apy + acz * apz;
+        let u, v, w;
+        if (d1 <= 0 && d2 <= 0) { u = 1; v = 0; w = 0; }
+        else {
+          const bpx = px - pos[b], bpy = py - pos[b + 1], bpz = pz - pos[b + 2];
+          const d3 = abx * bpx + aby * bpy + abz * bpz, d4 = acx * bpx + acy * bpy + acz * bpz;
+          if (d3 >= 0 && d4 <= d3) { u = 0; v = 1; w = 0; }
+          else {
+            const vc = d1 * d4 - d3 * d2;
+            if (vc <= 0 && d1 >= 0 && d3 <= 0) { v = d1 / (d1 - d3); u = 1 - v; w = 0; }
+            else {
+              const cpx = px - pos[c], cpy = py - pos[c + 1], cpz = pz - pos[c + 2];
+              const d5 = abx * cpx + aby * cpy + abz * cpz, d6 = acx * cpx + acy * cpy + acz * cpz;
+              if (d6 >= 0 && d5 <= d6) { u = 0; v = 0; w = 1; }
+              else {
+                const vb = d5 * d2 - d1 * d6;
+                if (vb <= 0 && d2 >= 0 && d6 <= 0) { w = d2 / (d2 - d6); u = 1 - w; v = 0; }
+                else {
+                  const va = d3 * d6 - d5 * d4;
+                  if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) { w = (d4 - d3) / ((d4 - d3) + (d5 - d6)); v = 1 - w; u = 0; }
+                  else { const den = 1 / (va + vb + vc); v = vb * den; w = vc * den; u = 1 - v - w; }
+                }
+              }
+            }
+          }
+        }
+        const qx = pos[a] + abx * v + acx * w, qy = pos[a + 1] + aby * v + acy * w, qz = pos[a + 2] + abz * v + acz * w;
+        let nx = px - qx, ny = py - qy, nz = pz - qz; const dd = nx * nx + ny * ny + nz * nz;
+        if (!(dd < THICK2)) continue;
+        if (sameSeamStretch(i, ia) || sameSeamStretch(i, ib) || sameSeamStretch(i, ic)) continue;
+        let d = Math.sqrt(dd);
+        if (d < 1e-5) { // lying in the triangle: push out along its normal
+          nx = aby * acz - abz * acy; ny = abz * acx - abx * acz; nz = abx * acy - aby * acx; const l = Math.hypot(nx, ny, nz); if (l < 1e-9) continue;
+          nx /= l; ny /= l; nz /= l; d = 0;
+        } else { nx /= d; ny /= d; nz /= d; }
+        const f = (THICK - d) / (1 + u * u + v * v + w * w);
+        const mx = nx * f, my = ny * f, mz = nz * f, FR = 0.6;
+        pos[ix] += mx; pos[ix + 1] += my; pos[ix + 2] += mz;
+        prev[ix] += mx * FR; prev[ix + 1] += my * FR; prev[ix + 2] += mz * FR;
+        pos[a] -= mx * u; pos[a + 1] -= my * u; pos[a + 2] -= mz * u; prev[a] -= mx * u * FR; prev[a + 1] -= my * u * FR; prev[a + 2] -= mz * u * FR;
+        pos[b] -= mx * v; pos[b + 1] -= my * v; pos[b + 2] -= mz * v; prev[b] -= mx * v * FR; prev[b + 1] -= my * v * FR; prev[b + 2] -= mz * v * FR;
+        pos[c] -= mx * w; pos[c + 1] -= my * w; pos[c + 2] -= mz * w; prev[c] -= mx * w * FR; prev[c + 1] -= my * w * FR; prev[c + 2] -= mz * w * FR;
       }
     }
   }
@@ -1075,6 +1253,7 @@ function makeSim(doc, forPreview = false) {
   // bounding boxes (with the cloth thickness) to skip far capsules quickly
   const capBox = caps.map(c => { const r = Math.max(c.ra, c.rb) + 0.5; return [0, 1, 2].map(q => [Math.min(c.a[q], c.b[q]) - r, Math.max(c.a[q], c.b[q]) + r]); });
   let time = 0;
+  const BEND = 1, GATHER_R = 0.3, RIB_PULL = 0.12;
   function step(dt, opts = {}) {
     time += dt;
     const assembleT = opts.assembleT ?? time;
@@ -1082,12 +1261,15 @@ function makeSim(doc, forPreview = false) {
     const damp = opts.firm ? 0.25 : assembleT < tGrav + 1 ? 0.9 : 0.97;
     const SK = new Float32Array(ST.length); let anyK = false;
     for (let c = 0; c < ST.length; c++) { SK[c] = stageOf(ST[c], assembleT); if (SK[c] > 0) anyK = true; }
+    // nothing moves further in a step than half the fabric's thickness, so cloth can't jump through cloth
+    const VMAX = THICK * 0.5;
     for (let i = 0; i < N; i++) {
       const ix = i * 3;
-      for (let q = 0; q < 3; q++) {
-        const p = pos[ix + q]; const v = (p - prev[ix + q]) * damp;
-        prev[ix + q] = p; pos[ix + q] = p + v + (q === 1 ? -grav * dt * dt : 0);
-      }
+      let vx = (pos[ix] - prev[ix]) * damp, vy = (pos[ix + 1] - prev[ix + 1]) * damp - grav * dt * dt, vz = (pos[ix + 2] - prev[ix + 2]) * damp;
+      const v2 = vx * vx + vy * vy + vz * vz;
+      if (v2 > VMAX * VMAX) { const k = VMAX / Math.sqrt(v2); vx *= k; vy *= k; vz *= k; }
+      prev[ix] = pos[ix]; prev[ix + 1] = pos[ix + 1]; prev[ix + 2] = pos[ix + 2];
+      pos[ix] += vx; pos[ix + 1] += vy; pos[ix + 2] += vz;
     }
     const iters = opts.iters || 14;
     for (let it = 0; it < iters; it++) {
@@ -1097,34 +1279,46 @@ function makeSim(doc, forPreview = false) {
         const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6;
         // knit fabric: compresses easily, stretches ~25% widthwise before resisting
         const rMax = C[c + 4] ? r * C[c + 4] : r;
+        // (the skip-one links are what resists bending: they push back in full when a fold shortens them)
         let diff;
-        if (d > rMax) diff = (d - rMax) / d; else if (d < r) diff = 0.3 * (d - r) / d; else continue;
+        if (d > rMax) diff = (d - rMax) / d; else if (d < r) diff = (C[c + 5] ? BEND : 0.3) * (d - r) / d;
+        else if (C[c + 4] > 1.7) diff = RIB_PULL * (d - r) / d; // ribbing springs back toward its drawn-in width
+        else continue;
         const f = 0.5 * k * diff;
         pos[a] += dx * f; pos[a + 1] += dy * f; pos[a + 2] += dz * f;
         pos[b] -= dx * f; pos[b + 1] -= dy * f; pos[b + 2] -= dz * f;
       }
-      if (anyK) for (let c = 0; c < S.length; c += 2) {
-        const f = 0.5 * SK[c >> 1]; if (!f) continue;
-        const a = S[c] * 3, b = S[c + 1] * 3;
-        const dx = pos[b] - pos[a], dy = pos[b + 1] - pos[a + 1], dz = pos[b + 2] - pos[a + 2];
-        pos[a] += dx * f; pos[a + 1] += dy * f; pos[a + 2] += dz * f;
-        pos[b] -= dx * f; pos[b + 1] -= dy * f; pos[b + 2] -= dz * f;
-      }
+      if (anyK) sewPass(SK);
       if (grab) applyGrab();
       if (gathers.length) { const g = stageOf(0, assembleT); if (g > 0) for (const vs of gathers) {
         let cx = 0, cy = 0, cz = 0; for (const v of vs) { cx += pos[v * 3]; cy += pos[v * 3 + 1]; cz += pos[v * 3 + 2]; }
         cx /= vs.length; cy /= vs.length; cz /= vs.length; const f = 0.5 * g;
-        for (const v of vs) { pos[v * 3] += (cx - pos[v * 3]) * f; pos[v * 3 + 1] += (cy - pos[v * 3 + 1]) * f; pos[v * 3 + 2] += (cz - pos[v * 3 + 2]) * f; }
+        // drawn up tight, the stitches still take room: they close to a small ring, not to a point
+        for (const v of vs) { const dx = pos[v * 3] - cx, dy = pos[v * 3 + 1] - cy, dz = pos[v * 3 + 2] - cz; const d = Math.hypot(dx, dy, dz);
+          const k = d > GATHER_R ? f * (1 - GATHER_R / d) : 0; pos[v * 3] -= dx * k; pos[v * 3 + 1] -= dy * k; pos[v * 3 + 2] -= dz * k; }
       } }
       if (it % 2 === 1 || it === iters - 1) collide();
-      if (it === (iters >> 1) || it === iters - 1) selfCollide();
+      if (it === (iters >> 1) || it === iters - 1) { if (anyGraph) selfCollide(); clothCollide(); }
     }
+    // collisions come last in each pass and nudge sewn edges apart: close them once more
+    if (anyK) for (let pass = 0; pass < 2; pass++) sewPass(SK);
     // a head holds a hat centred: keep head-placed pieces on the head's axis (x, z)
     for (const p of centred) {
       let cx = 0, cz = 0; const a = p.offset, n = p.mesh.local.length;
       for (let k = a; k < a + n; k++) { cx += pos[k * 3]; cz += pos[k * 3 + 2]; }
       cx = cx / n * 0.5; cz = (cz / n - 0.1) * 0.5;
       for (let k = a; k < a + n; k++) { pos[k * 3] -= cx; pos[k * 3 + 2] -= cz; prev[k * 3] -= cx; prev[k * 3 + 2] -= cz; }
+    }
+  }
+  function sewPass(SK) {
+    for (let c = 0; c < SW.length; c += SWS) {
+      const sk = SK[SW[c + 4]]; if (!sk) continue;
+      const a = SW[c] * 3, b0 = SW[c + 1] * 3, b1 = SW[c + 2] * 3, w = SW[c + 3], w0 = 1 - w;
+      const dx = pos[b0] * w0 + pos[b1] * w - pos[a], dy = pos[b0 + 1] * w0 + pos[b1 + 1] * w - pos[a + 1], dz = pos[b0 + 2] * w0 + pos[b1 + 2] * w - pos[a + 2];
+      const f = sk / (1 + w0 * w0 + w * w), f0 = f * w0, f1 = f * w;
+      pos[a] += dx * f; pos[a + 1] += dy * f; pos[a + 2] += dz * f;
+      pos[b0] -= dx * f0; pos[b0 + 1] -= dy * f0; pos[b0 + 2] -= dz * f0;
+      if (w) { pos[b1] -= dx * f1; pos[b1 + 1] -= dy * f1; pos[b1 + 2] -= dz * f1; }
     }
   }
   function collide() {
@@ -1173,8 +1367,18 @@ function makeSim(doc, forPreview = false) {
   }
   function endGrab() { grab = null; }
   function reset() { time = 0; parts.forEach(p => pos.set(p.pos0, p.offset * 3)); prev.set(pos); }
+  /** How far the sewn edges are from each other: every seam vertex against its place on the other edge. */
+  function edgeGap() {
+    let max = 0, sum = 0, n = 0;
+    for (let c = 0; c < SW.length; c += SWS) {
+      const a = SW[c] * 3, b0 = SW[c + 1] * 3, b1 = SW[c + 2] * 3, w = SW[c + 3];
+      const d = Math.hypot(pos[b0] * (1 - w) + pos[b1] * w - pos[a], pos[b0 + 1] * (1 - w) + pos[b1 + 1] * w - pos[a + 1], pos[b0 + 2] * (1 - w) + pos[b1 + 2] * w - pos[a + 2]);
+      max = Math.max(max, d); sum += d; n++;
+    }
+    return { max, mean: n ? sum / n : 0 };
+  }
   function seamGap() { let m = 0; for (let c = 0; c < S.length; c += 2) { const a = S[c] * 3, b = S[c + 1] * 3; m = Math.max(m, Math.hypot(pos[a] - pos[b], pos[a + 1] - pos[b + 1], pos[a + 2] - pos[b + 2])); } return m; }
-  return { parts, pos, step, reset, seamGap, restNear: (i, j) => fabricNear(i, j) || sameSeamStretch(i, j), feet, startGrab, endGrab, get grab() { return grab; }, seams: S, seamLines: pairLine, useTable, stageOf, tGrav, nStages, settleT: tGrav + 6, nSeam: S.length / 2, get time() { return time; }, N };
+  return { parts, pos, step, reset, seamGap, edgeGap, welds, restNear: (i, j) => fabricNear(i, j) || sameSeamStretch(i, j), feet, startGrab, endGrab, get grab() { return grab; }, seams: S, seamLines: pairLine, useTable, stageOf, tGrav, nStages, settleT: tGrav + 6, nSeam: S.length / 2, get time() { return time; }, N };
 }
 
 function run(src, overrides) {
